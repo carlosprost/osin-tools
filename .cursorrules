@@ -1,0 +1,11 @@
+# Reglas del Agente (Antigravity Code)
+
+1. **Idioma**: Responder SIEMPRE en **Español**.
+2. **Claridad**: Explicar los pasos de forma clara y directa.
+3. **Contexto**: El usuario prefiere soluciones prácticas y directas.
+4. **Verificación**: Verificar siempre que el código funcione antes de darlo por terminado.
+
+## Estado del Proyecto
+- Tauri v2 application.
+- Frontend: Svelte + Vite.
+- Backend: Rust.
