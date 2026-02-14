@@ -1,7 +1,10 @@
 <script>
   // App.svelte - Main Layout
+  import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { osintTools } from "./lib/osint_tools.js";
   import ToolCard from "./components/ToolCard.svelte";
+
   import IpLookup from "./components/tools/IpLookup.svelte";
   import UsernameCheck from "./components/tools/UsernameCheck.svelte";
   import DomainIntel from "./components/tools/DomainIntel.svelte";
@@ -14,6 +17,25 @@
 
   let currentView = "dashboard";
   let activeToolId = null;
+  let toolParams = {}; // Parameters passed to tools
+
+  onMount(async () => {
+    // Listen for events from Agent to open tools
+    const unlisten = await listen("open-tool", (event) => {
+      console.log("Evento open-tool recibido:", event.payload);
+      const { tool, image } = event.payload;
+
+      if (tool === "reverse_image") {
+        toolParams = { image };
+        currentView = "tools";
+        activeToolId = "reverse-image";
+      }
+    });
+
+    return () => {
+      unlisten();
+    };
+  });
 </script>
 
 <div class="app-shell">
@@ -142,7 +164,13 @@
         {:else if activeToolId === "exif-viewer"}
           <ExifViewer onBack={() => (activeToolId = null)} />
         {:else if activeToolId === "reverse-image"}
-          <ReverseImageSearch onBack={() => (activeToolId = null)} />
+          <ReverseImageSearch
+            imageUrl={toolParams?.image || ""}
+            onBack={() => {
+              activeToolId = null;
+              toolParams = {};
+            }}
+          />
         {:else if activeToolId === "domain-email-search"}
           <DomainEmailSearch onBack={() => (activeToolId = null)} />
         {:else}

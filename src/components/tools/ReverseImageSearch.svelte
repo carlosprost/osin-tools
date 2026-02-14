@@ -3,7 +3,7 @@
 
     export let onBack;
 
-    let imageUrl = "";
+    export let imageUrl = "";
 
     // Engine Definitions
     const engines = [

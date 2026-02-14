@@ -1,9 +1,11 @@
 // src-tauri/src/agent.rs
+use base64::{engine::general_purpose, Engine as _};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::env;
+use std::fs;
 
 // --- Estructuras para la API de Gemini ---
 
@@ -16,7 +18,7 @@ pub struct ToolCall {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum AgentResponse {
     Text(String),
-    Tool(ToolCall),
+    Tools(Vec<ToolCall>), // Changed from Tool(ToolCall) to Tools(Vec<ToolCall>)
     Error(String),
 }
 
@@ -41,9 +43,9 @@ impl Agent {
         Agent {
             system_prompt: "Eres un experto analista de OSINT en una aplicación de tablero. \
             Tienes acceso a herramientas para investigar objetivos. \
-            Si el usuario te pide escanear algo, USA LAS HERRAMIENTAS. \
-            Responde siempre en Español."
-                .to_string(),
+            Si el usuario te pide escanear algo, PUEDES USAR MULTIPLES HERRAMIENTAS SI ES NECESARIO (ping, whois, dns). \
+            Cuando tengas los resultados, genera un REPORTE DETALLADO Y ESTRUCTURADO en Markdown. \
+            Responde siempre en Español.".to_string(),
             history: Vec::new(),
             api_key,
             client: Client::new(),
@@ -58,7 +60,18 @@ impl Agent {
         });
     }
 
-    pub async fn think(&self, last_input: &str) -> AgentResponse {
+    pub fn add_function_response(&mut self, tool_name: &str, content: &str) {
+        // En la API de Gemini (v1beta), las respuestas de funciones se añaden como 'functionResponse'
+        // Pero para simplificar en este cliente REST, las añadiremos como mensajes 'user' con un formato especial
+        // o idealmente como 'function' role si estuviéramos usando la estructura completa de `Content`.
+        // Hack para prototipo: Simular que el sistema le entrega el resultado.
+        self.history.push(AgentMessage {
+            role: "user".to_string(), // Gemini a veces prefiere 'function', pero 'user' funciona para contexto
+            content: format!("Resultado de la herramienta '{}':\n{}", tool_name, content),
+        });
+    }
+
+    pub async fn think(&self, last_input: Option<&str>, image_path: Option<&str>) -> AgentResponse {
         if self.api_key.is_empty() || self.api_key.contains("TU_API_KEY") {
             return AgentResponse::Text(
                 "⚠️ Error: No se encontró la API Key de Gemini. \
@@ -86,55 +99,145 @@ impl Agent {
             }));
         }
 
-        // 3. Agregar el input actual
-        contents.push(json!({
-            "role": "user",
-            "parts": [{ "text": last_input }]
-        }));
+        // 3. Agregar el input actual + Imagen si existe
+        if let Some(input) = last_input {
+            let mut parts = Vec::new();
+
+            // Texto del usuario
+            parts.push(json!({ "text": input }));
+
+            // Imagen adjunta?
+            if let Some(path) = image_path {
+                if let Ok(bytes) = fs::read(path) {
+                    let b64 = general_purpose::STANDARD.encode(&bytes);
+                    // Guess mime type simply by extension or default to jpeg
+                    let mime = if path.to_lowercase().ends_with(".png") {
+                        "image/png"
+                    } else {
+                        "image/jpeg"
+                    };
+
+                    parts.push(json!({
+                        "inline_data": {
+                            "mime_type": mime,
+                            "data": b64
+                        }
+                    }));
+                } else {
+                    // Si falla leer, avisar en el texto? O ignorar?
+                    // Mejor agregar un texto de sistema/error
+                    parts.push(json!({ "text": "[Error leyendo la imagen adjunta]" }));
+                }
+            }
+
+            contents.push(json!({
+                "role": "user",
+                "parts": parts
+            }));
+        } else if let Some(path) = image_path {
+            // Caso raro: Imagen sin texto (solo adjuntar)
+            // Gemini soporta multimodal prompt solo imagen? Si.
+            let mut parts = Vec::new();
+            if let Ok(bytes) = fs::read(path) {
+                let b64 = general_purpose::STANDARD.encode(&bytes);
+                let mime = if path.to_lowercase().ends_with(".png") {
+                    "image/png"
+                } else {
+                    "image/jpeg"
+                };
+                parts.push(json!({
+                    "inline_data": {
+                        "mime_type": mime,
+                        "data": b64
+                    }
+                }));
+                // Gemini suele requerir algun prompt, aunque sea "Describe esto".
+                // Pero si es 'user', está bien.
+            }
+            contents.push(json!({
+                "role": "user",
+                "parts": parts
+            }));
+        }
 
         // Definir herramientas
         let tools = json!([{
             "function_declarations": [
                 {
                     "name": "ping",
-                    "description": "Comprueba la conectividad con un host (IP o dominio) usando ICMP ping.",
+                    "description": "Comprueba la conectividad con un host.",
                     "parameters": {
                         "type": "OBJECT",
                         "properties": {
-                            "target": {
-                                "type": "STRING",
-                                "description": "La dirección IP o nombre de dominio a contactar (ej: google.com, 8.8.8.8)"
-                            }
+                            "target": { "type": "STRING", "description": "Host o IP" }
                         },
                         "required": ["target"]
                     }
                 },
                 {
                     "name": "whois",
-                    "description": "Obtiene información de registro de un dominio (WHOIS).",
+                    "description": "Obtiene información de registro de dominio.",
                     "parameters": {
                         "type": "OBJECT",
                         "properties": {
-                            "target": {
-                                "type": "STRING",
-                                "description": "El nombre de dominio a consultar (ej: google.com)"
-                            }
+                            "target": { "type": "STRING", "description": "Dominio" }
                         },
                         "required": ["target"]
                     }
                 },
                  {
                     "name": "dns",
-                    "description": "Realiza una búsqueda de DNS para resolver IPs de un dominio.",
+                    "description": "Busca registros DNS/IP.",
                     "parameters": {
                         "type": "OBJECT",
                         "properties": {
-                            "target": {
-                                "type": "STRING",
-                                "description": "El dominio a resolver"
-                            }
+                            "target": { "type": "STRING", "description": "Dominio" }
                         },
                         "required": ["target"]
+                    }
+                },
+                {
+                    "name": "extract_metadata",
+                    "description": "Extrae metadatos EXIF de una imagen local.",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "path": { "type": "STRING", "description": "Ruta absoluta de la imagen" }
+                        },
+                        "required": ["path"]
+                    }
+                },
+                {
+                    "name": "reverse_image_search",
+                    "description": "Abre la herramienta de búsqueda inversa de imágenes con la imagen especificada.",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "path": { "type": "STRING", "description": "Ruta absoluta de la imagen" }
+                        },
+                        "required": ["path"]
+                    }
+                },
+                {
+                    "name": "web_scrape_search",
+                    "description": "Busca información en la web sobre una persona o tema",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "query": { "type": "STRING", "description": "Consulta de búsqueda (nombre, tema, etc)" }
+                        },
+                        "required": ["query"]
+                    }
+                },
+                {
+                    "name": "browse_url",
+                    "description": "Visita una URL con un navegador real (Chrome headless) y extrae el texto visible de la página. Usa esto cuando necesites ver el contenido de una página web específica que requiere JavaScript o bloquea scrapers HTTP simples (ej: Facebook, LinkedIn, páginas dinámicas). NO uses esto para buscar en Google/DuckDuckGo — para eso usa web_scrape_search.",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "url": { "type": "STRING", "description": "URL completa a visitar (ej: https://facebook.com/zuck)" }
+                        },
+                        "required": ["url"]
                     }
                 }
             ]
@@ -155,7 +258,7 @@ impl Agent {
             Ok(r) => {
                 if !r.status().is_success() {
                     let err_text = r.text().await.unwrap_or_default();
-                    return AgentResponse::Error(format!("Error de API Gemini: {}", err_text));
+                    return AgentResponse::Error(format!("API Error: {}", err_text));
                 }
 
                 let json_resp: serde_json::Value = match r.json().await {
@@ -168,6 +271,9 @@ impl Agent {
                     if let Some(first) = candidates.first() {
                         if let Some(content) = first.get("content") {
                             if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
+                                let mut tool_calls = Vec::new();
+                                let mut text_response = String::new();
+
                                 for part in parts {
                                     // 1. Revisar si hay llamada a función
                                     if let Some(fc) = part.get("functionCall") {
@@ -187,7 +293,7 @@ impl Agent {
                                             }
                                         }
 
-                                        return AgentResponse::Tool(ToolCall {
+                                        tool_calls.push(ToolCall {
                                             tool_name: name,
                                             arguments,
                                         });
@@ -195,8 +301,14 @@ impl Agent {
 
                                     // 2. Si no, devolver texto
                                     if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                                        return AgentResponse::Text(text.to_string());
+                                        text_response.push_str(text);
                                     }
+                                }
+
+                                if !tool_calls.is_empty() {
+                                    return AgentResponse::Tools(tool_calls);
+                                } else if !text_response.is_empty() {
+                                    return AgentResponse::Text(text_response);
                                 }
                             }
                         }

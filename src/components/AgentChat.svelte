@@ -1,22 +1,40 @@
 <script>
     import { onMount, afterUpdate } from "svelte";
     import { invoke } from "@tauri-apps/api/core";
+    import { open } from "@tauri-apps/plugin-dialog"; // Import dialog
+    import * as faceService from "../lib/face_recognition.js";
 
     let messages = [
         {
             role: "system",
-            content: "Agente inicializado. Listo para tareas OSINT.",
+            content:
+                "Agente inicializado. Listo para tareas OSINT, análisis de imágenes y biometría.",
         },
     ];
     let input = "";
     let isLoading = false;
     let chatContainer;
     let isTauri = false;
+    let attachedImage = null; // Store path
+    let targetDescriptor = null; // Biometric fingerprint
 
     onMount(async () => {
-        // En Tauri v2, si usamos el import, asumimos que estamos en el entorno correcto o manejamos el error en invoke.
         isTauri = true;
-        // Si quisieramos verificar estrictamente, podriamos probar un invoke simple al inicio.
+        try {
+            await invoke("download_face_models"); // Ensure models exist
+            await faceService.loadModels();
+            console.log("Sistema biométrico listo");
+        } catch (e) {
+            console.error("Error iniciando biometría:", e);
+            messages = [
+                ...messages,
+                {
+                    role: "error",
+                    content:
+                        "⚠️ Error cargando modelos biométricos. Ver consola.",
+                },
+            ];
+        }
     });
 
     afterUpdate(() => {
@@ -25,43 +43,88 @@
         }
     });
 
-    async function sendMessage() {
-        if (!input.trim() || isLoading) return;
+    async function selectImage() {
+        try {
+            const file = await open({
+                multiple: false,
+                filters: [
+                    { name: "Image", extensions: ["png", "jpg", "jpeg"] },
+                ],
+            });
+            if (file) {
+                attachedImage = file;
+                const result = await invoke("read_file_base64", { path: file });
+                if (result.success) {
+                    const img = document.createElement("img");
+                    img.src = result.data;
+                    img.onload = async () => {
+                        const descriptor =
+                            await faceService.getFaceDescriptor(img);
+                        if (descriptor) {
+                            targetDescriptor = descriptor;
+                            messages = [
+                                ...messages,
+                                {
+                                    role: "system",
+                                    content:
+                                        "✅ Rostro detectado y perfilado. Se comparará con las búsquedas.",
+                                },
+                            ];
+                        } else {
+                            messages = [
+                                ...messages,
+                                {
+                                    role: "system",
+                                    content:
+                                        "⚠️ No se detectó rostro en la imagen adjunta.",
+                                },
+                            ];
+                        }
+                    };
+                }
+            }
+        } catch (e) {
+            console.error("Dialog error or Bio error:", e);
+        }
+    }
 
-        const userMsg = { role: "user", content: input };
-        messages = [...messages, userMsg];
-        const currentInput = input;
+    async function sendMessage() {
+        if (!input.trim() && !attachedImage) return;
+
+        const userMsg = input;
+        const imgPath = attachedImage;
+
+        messages = [
+            ...messages,
+            { role: "user", content: userMsg, image: imgPath },
+        ];
         input = "";
+        attachedImage = null; // Clear attachment after sending
         isLoading = true;
 
         try {
-            if (isTauri) {
-                // const { invoke } = window.__TAURI__.core; // Ya importado arriba
-                const response = await invoke("ask_agent", {
-                    query: currentInput,
-                });
+            const result = await invoke("ask_agent", {
+                query: userMsg,
+                imagePath: imgPath,
+            });
 
-                if (response.success) {
-                    messages = [
-                        ...messages,
-                        { role: "assistant", content: response.data },
-                    ];
-                } else {
-                    messages = [
-                        ...messages,
-                        { role: "error", content: `Error: ${response.error}` },
-                    ];
-                }
-            } else {
-                // Web Mock
-                await new Promise((r) => setTimeout(r, 1000));
+            if (result.success) {
                 messages = [
                     ...messages,
-                    {
-                        role: "assistant",
-                        content: `[MODO WEB] Escanearía "${currentInput}" si estuviera en Tauri.`,
-                    },
+                    { role: "assistant", content: result.data },
                 ];
+
+                // Automatic Face Verification on content
+                if (targetDescriptor) {
+                    // Extract Markdown Image links matches
+                    const regex = /!\[.*?\]\((.*?)\)/g;
+                    let match;
+                    while ((match = regex.exec(result.data)) !== null) {
+                        const url = match[1];
+                        verifyFaceInUrl(url);
+                    }
+                }
+            } else {
             }
         } catch (e) {
             messages = [
@@ -89,7 +152,19 @@
                         <span class="icon">❌</span>
                     {/if}
                     <div class="content">
-                        <pre>{msg.content}</pre>
+                        {#if msg.image}
+                            <div class="msg-image">
+                                <small>📎 Imagen adjunta</small>
+                                <!-- We can try to show preview if we have it, but path is local -->
+                                <!-- For now just text indication is enough as preview is in input area before sending -->
+                            </div>
+                        {/if}
+                        <!-- Render Markdown (basic) -->
+                        <div class="markdown-body">
+                            {@html msg.content
+                                .replace(/\n/g, "<br>")
+                                .replace(/\*\*(.*?)\*\*/g, "<b>$1</b>")}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -104,18 +179,77 @@
         {/if}
     </div>
 
-    <div class="input-area">
-        <input
-            type="text"
-            bind:value={input}
-            placeholder="Pregunta al Agente (ej: 'Escanear google.com')"
-            on:keydown={(e) => e.key === "Enter" && sendMessage()}
-        />
-        <button on:click={sendMessage} disabled={isLoading}>Enviar</button>
+    <div class="input-area-wrapper">
+        {#if attachedImage}
+            <div class="image-preview">
+                <span>📎 {attachedImage.split(/[\\/]/).pop()}</span>
+                <button
+                    class="remove-btn"
+                    on:click={() => (attachedImage = null)}>x</button
+                >
+            </div>
+        {/if}
+        <div class="input-area">
+            <button
+                class="attach-btn"
+                on:click={selectImage}
+                title="Adjuntar Imagen">📷</button
+            >
+            <input
+                type="text"
+                bind:value={input}
+                placeholder="Pregunta o adjunta una imagen..."
+                on:keydown={(e) => e.key === "Enter" && sendMessage()}
+            />
+            <button on:click={sendMessage} disabled={isLoading}>Enviar</button>
+        </div>
     </div>
 </div>
 
 <style>
+    /* ... (previous styles) ... */
+
+    .input-area-wrapper {
+        background: var(--bg-secondary);
+        border-top: 1px solid var(--border-color);
+        display: flex;
+        flex-direction: column;
+    }
+
+    .image-preview {
+        padding: 5px 15px;
+        background: rgba(var(--accent-rgb), 0.1);
+        font-size: 0.8rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        border-bottom: 1px solid var(--border-color);
+    }
+
+    .remove-btn {
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        cursor: pointer;
+        padding: 0 5px;
+        font-weight: bold;
+    }
+
+    .input-area {
+        padding: 16px;
+        display: flex;
+        gap: 10px;
+        /* background removed here as wrapper handles it */
+    }
+
+    .attach-btn {
+        padding: 0 16px;
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+        border: 1px solid var(--border-color);
+    }
+
+    /* Keep existing styles */
     .agent-view {
         display: flex;
         flex-direction: column;
@@ -180,20 +314,7 @@
         border: 1px solid rgba(239, 68, 68, 0.3);
     }
 
-    .content pre {
-        white-space: pre-wrap;
-        font-family: var(--font-mono);
-        margin: 0;
-        font-size: 0.9rem;
-    }
-
-    .input-area {
-        padding: 16px;
-        background: var(--bg-secondary);
-        border-top: 1px solid var(--border-color);
-        display: flex;
-        gap: 10px;
-    }
+    /* .content pre removed as we use markdown-body now */
 
     input {
         flex: 1;
@@ -205,6 +326,7 @@
         font-family: var(--font-mono);
     }
 
+    /* Specific button styling mostly handled by global but ensuring here */
     button {
         padding: 0 24px;
         background: var(--accent-color);
