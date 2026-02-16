@@ -1,5 +1,5 @@
 <script>
-  export let tool;
+  let { tool } = $props();
 </script>
 
 <div class="tool-card">

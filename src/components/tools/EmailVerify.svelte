@@ -178,7 +178,7 @@
         }
         to {
             opacity: 1;
-            transform: 0;
+            transform: translateY(0);
         }
     }
 

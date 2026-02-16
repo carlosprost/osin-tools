@@ -1,0 +1,64 @@
+    Checking osint-dashboard v0.0.0 (D:\Programacion\Github\osin-tools\src-tauri)
+error[E0433]: failed to resolve: could not find `plugin_shell` in `tauri`
+  --> src\main.rs:19:24
+   |
+19 |         .plugin(tauri::plugin_shell::init())
+   |                        ^^^^^^^^^^^^ could not find `plugin_shell` in `tauri`
+
+error[E0433]: failed to resolve: could not find `plugin_dialog` in `tauri`
+  --> src\main.rs:20:24
+   |
+20 |         .plugin(tauri::plugin_dialog::init())
+   |                        ^^^^^^^^^^^^^ could not find `plugin_dialog` in `tauri`
+
+warning: unused import: `std::env`
+ --> src\tools.rs:4:5
+  |
+4 | use std::env;
+  |     ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+error[E0599]: no method named `state` found for struct `AppHandle` in the current scope
+   --> src\commands.rs:83:33
+    |
+83  |     let config_lock = app_clone.state::<Mutex<OsintConfig>>();
+    |                                 ^^^^^
+    |
+   ::: C:\Users\PC\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\tauri-2.10.2\src\lib.rs:735:6
+    |
+735 |   fn state<T>(&self) -> State<'_, T>
+    |      ----- the method is available for `AppHandle` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `Manager` which provides `state` is implemented but not in scope; perhaps you want to import it
+    |
+2   + use tauri::Manager;
+    |
+help: there is a method `try_state` with a similar name
+    |
+83  |     let config_lock = app_clone.try_state::<Mutex<OsintConfig>>();
+    |                                 ++++
+
+error[E0277]: async commands that contain references as inputs must return a `Result`
+  --> src\commands.rs:21:6
+   |
+21 | ) -> OsintResult {
+   |      ^^^^^^^^^^^ the trait `commands::_::AsyncCommandMustReturnResult` is not implemented for `OsintResult`
+   |
+   = help: the trait `commands::_::AsyncCommandMustReturnResult` is implemented for `Result<A, B>`
+   = note: required for the cast from `&OsintResult` to `&dyn commands::_::AsyncCommandMustReturnResult`
+
+error[E0277]: async commands that contain references as inputs must return a `Result`
+  --> src\commands.rs:51:6
+   |
+51 | ) -> OsintResult {
+   |      ^^^^^^^^^^^ the trait `commands::_::AsyncCommandMustReturnResult` is not implemented for `OsintResult`
+   |
+   = help: the trait `commands::_::AsyncCommandMustReturnResult` is implemented for `Result<A, B>`
+   = note: required for the cast from `&OsintResult` to `&dyn commands::_::AsyncCommandMustReturnResult`
+
+Some errors have detailed explanations: E0277, E0433, E0599.
+For more information about an error, try `rustc --explain E0277`.
+warning: `osint-dashboard` (bin "osint-dashboard") generated 1 warning
+error: could not compile `osint-dashboard` (bin "osint-dashboard") due to 5 previous errors; 1 warning emitted

@@ -10,14 +10,14 @@ tauri-build = { version = "2.0.0", features = [] }
 
 [dependencies]
 tauri = { version = "2.0.0", features = [] }
-tauri-plugin-shell = "2.0.0"
+tauri-plugin-shell = "2.3.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.11", features = ["json", "blocking"] }
+reqwest = { version = "0.11", features = ["json", "blocking", "socks"] }
 tokio = { version = "1", features = ["full"] }
 whois-rust = "1.5.1"
 dns-lookup = "2.0.4"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 exif = { package = "kamadak-exif", version = "0.6.1" }
 dotenv = "0.15"
 tauri-plugin-dialog = "2.6.0"
@@ -25,3 +25,6 @@ base64 = "0.22.1"
 scraper = "0.19.0"
 urlencoding = "2.1.3"
 headless_chrome = "1"
+rand = "0.8"
+rusqlite = { version = "0.38.0", features = ["bundled"] }
+uuid = { version = "1.21.0", features = ["v4", "serde"] }

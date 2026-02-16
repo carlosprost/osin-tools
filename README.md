@@ -1,44 +1,41 @@
-# Svelte + Vite
+# OSINT Tools Dashboard 🕵️‍♂️🇦🇷
 
-This template should help get you started developing with Svelte in Vite.
+Bienvenido al ecosistema de inteligencia relacional más avanzado. Este dashboard permite realizar investigaciones OSINT automatizadas, gestionar objetivos y mapear vínculos utilizando un Agente IA autónomo.
 
-## Recommended IDE Setup
+## 🚀 Características Principales
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
+- **Agente Ninja Autónomo**: Un analista de inteligencia que conecta puntos, realiza búsquedas y genera reportes estratégicos por vos.
+- **Inteligencia Relacional**: Base de datos SQLite dedicada por investigación para mapear vínculos entre Personas, Dominios, IPs y Emails.
+- **Privacidad Total**: Integración nativa con Tor (Sidecar) y enmascaramiento de MAC address.
+- **Herramientas Avanzadas**: Google Dorks, Web Scraping, Filtraciones (HIBP), VirusTotal, Shodan y Reconocimiento Facial (en desarrollo).
 
-## Need an official Svelte framework?
+## 🛠️ Stack Tecnológico
 
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
+- **Frontend**: Svelte (Signals, BEM, SoC).
+- **Backend**: Rust (Tauri v2.0).
+- **Base de Datos**: SQLite (Relacional).
+- **IA**: Ollama (Llama 3.2 local).
 
-## Technical considerations
+## 🗂️ Estructura del Proyecto
 
-**Why use this over SvelteKit?**
+- `src-tauri/src/agent.rs`: El cerebro del analista IA.
+- `src-tauri/src/cases.rs`: Gestión de investigaciones y persistencia relacional.
+- `src-tauri/src/commands.rs`: Controlador principal de herramientas y flujo de datos.
+- `src-tauri/src/tools.rs`: Implementación técnica de herramientas OSINT.
+- `src/components/`: Interfaz moderna y dinámica construida con Svelte.
 
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
+## 📋 Manual de Uso del Agente
 
-This template contains as little as possible to get started with Vite + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
+Para interactuar con el Agente, simplemente usá lenguaje natural:
 
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
+- _"Investigá el dominio wolftei.com y sacá todo lo técnico que encuentres."_
+- _"Encontré este email: info@ejemplo.com. ¿Podés vincularlo a alguna persona?"_
+- _"Hacé un reporte ejecutivo de la investigación hasta ahora."_
 
-**Why include `.vscode/extensions.json`?**
+## 🛡️ Seguridad
 
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
+Consultá el [SECURITY_REPORT.md](./SECURITY_REPORT.md) para detalles sobre estándares ISO y mitigación OWASP.
 
-**Why enable `checkJs` in the JS template?**
+---
 
-It is likely that most cases of changing variable types in runtime are likely to be accidental, rather than deliberate. This provides advanced typechecking out of the box. Should you like to take advantage of the dynamically-typed nature of JavaScript, it is trivial to change the configuration.
-
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/sveltejs/svelte-hmr/tree/master/packages/svelte-hmr#preservation-of-local-state).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
-
-```js
-// store.js
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
-```
-"# osin-tools" 
+_Desarrollado con pasión técnica y precisión judicial._

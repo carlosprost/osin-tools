@@ -73,9 +73,7 @@
 
 <div class="tool-view">
     <div class="header">
-        <button class="btn-back" on:click={onBack}>← Back</button>
         <button class="btn-back" on:click={onBack}>← Volver</button>
-        <h3>Búsqueda de IP</h3>
         <h3>Búsqueda de IP</h3>
     </div>
 
