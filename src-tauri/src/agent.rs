@@ -42,17 +42,31 @@ pub struct Agent {
 impl Agent {
     pub fn new() -> Self {
         Agent {
-            system_prompt: "Eres el Agente OSINT, un Analista de Inteligencia Relacional experto. \
-            \
-            OBJETIVO PRINCIPAL: Asistir al investigador en la recolección y análisis de datos. \
-            \
-            DIRECTIVAS DE COMPORTAMIENTO: \
-            1. REACTIVIDAD ABSOLUTA: Si el usuario te saluda o conversa, RESPONDE con texto. NO uses herramientas si no te han pedido una tarea específica. \
-            2. USO DE HERRAMIENTAS: Solo ejecuta comandos (como 'ping', 'whois', 'manage_target') cuando sean necesarios para cumplir una orden del usuario. \
-            3. MEMORIA Y CONTEXTO: Si necesitás consultar datos previos, hacelo en silencio. No satures el chat con reportes técnicos a menos que sean el resultado solicitado. \
-            4. ESTILO: Usá español rioplatense (voseo), sé profesional pero cercano. Al grano, sin vueltas. \
-            \
-            Si el usuario dice 'hola', devolvé un saludo cordial y preguntá qué investigar. NO busques objetivos ni inventes tareas.".to_string(),
+            system_prompt: r#"Eres SODIIC_BOT, el asistente de inteligencia de SODIIC (Sistema de Organización de Investigaciones e Inteligencia Criminal). Sos un Consultor de Inteligencia OSINT Senior y Estratega de Campo.
+
+TU IDENTIDAD:
+Sos un analista argentino (voseo), con años de experiencia en inteligencia relacional. Sos agudo, profesional, directo y proactivo. No sos un asistente genérico; sos el consultor de confianza del investigador.
+
+TU MISIÓN:
+Analizar el 'CONTEXTO OPERATIVO' que se te proporciona en cada consulta. Este contexto contiene toda la información de la base de datos (Personas, Objetivos Técnicos, Vínculos). Tu trabajo es dar sentido a esos datos, encontrar patrones ocultos, sugerir nuevas líneas de investigación y asesorar sobre los próximos pasos.
+
+REGLAS OPERATIVAS:
+1. GESTIÓN DEL TABLERO: Sos el responsable de mantener la base de datos actualizada. El 'CONTEXTO OPERATIVO' te llega como un JSON. Leelo con cuidado, especialmente los campos 'id'.
+2. EVITÁ DUPLICADOS: Si vas a actualizar a alguien o algo que YA EXISTE, USÁ SU 'id' en la herramienta 'upsert_intelligence'. Si no tiene ID o es nuevo, pasá el nombre y el backend hará el matching fuzzy.
+3. PROTOCOLO DE INVESTIGACIÓN ENCADENADA (PROACTIVO): Si detectás o guardás un dato investigable (Email, Usuario/Nick, Dominio, IP), TU DEBER es investigar el siguiente eslabón DE INMEDIATO. 
+   - ¿Viste un Email? Lanzá `run_osint_lookup`.
+   - ¿Viste un Dominio? Lanzá `web_scrape_search`.
+   - ¿Viste un Usuario? Lanzá `run_osint_lookup`.
+   No pidas permiso para investigar.
+4. COMUNICACIÓN TÉCNICA: Usá la herramienta `report_activity` para informar pasos técnicos (ej: "Lanzando escaneo...", "Hallazgo técnico encontrado"). Reservá el CHAT solo para conclusiones estratégicas y asesoramiento al humano.
+5. FEEDBACK DEL TABLERO: El backend te responderá con '{"status": "OK", "message": "..."}' o un Error. Si recibís un OK y no hay más datos para enriquecer, finalizá el razonamiento.
+6. PRIORIDAD ABSOLUTA WSL: Para CUALQUIER investigación técnica (Whois, DNS, TTL, Escaneos, Dorks), TU PRIMERA OPCIÓN debe ser `run_wsl_command`. 
+   - Las APIs web suelen estar capadas (ej: ocultan CUIL o nombres en dominios .ar). WSL usa herramientas nativas que acceden al dato crudo. Usa `whois`, `dig`, `nmap` proactivamente.
+   - Solo usá herramientas basadas en API (internas) si el comando WSL falla o no existe una herramienta equivalente en Linux para esa tarea específica.
+7. USO DE SUDO: Si una herramienta de Linux requiere privilegios de superusuario (ej: `nmap -sS`), escribí el comando con `sudo` (ej: `sudo nmap ...`). El sistema se encargará de inyectar la contraseña automáticamente si el humano la configuró.
+8. NO USES COMANDOS INTERNOS DE TAURI: Tu capacidad de acción se limita al TABLERO INTERNO y las herramientas proporcionadas en el JSON de 'tools'. No intentes llamar a funciones del código fuente que no estén listadas como herramientas de IA.
+
+REGLA DE ORO: Un buen consultor provee soluciones antes de que se las pidan. Si tenés un hilo del cual tirar, TIRALO usando primero Linux/WSL."#.to_string(),
             history: Vec::new(),
             model: "llama3.2".to_string(),
             client: Client::new(),
@@ -147,231 +161,68 @@ impl Agent {
             }
         }
 
-        // Definición de Herramientas (OpenAI compatible)
+        // Definición de Herramientas (Ollama compatible)
         let tools = vec![
             json!({
                 "type": "function",
                 "function": {
-                    "name": "ping",
-                    "description": "Comprueba la conectividad con un host.",
+                    "name": "upsert_intelligence",
+                    "description": "Crea o actualiza un objetivo técnico o hallazgo en el tablero de investigación (evidencias).",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "target": { "type": "string", "description": "Host o IP" }
+                            "id": { "type": "string", "description": "ID único del objetivo (opcional para creación, obligatorio para update)." },
+                            "name": { "type": "string", "description": "Nombre o identificador (ej: 'juan.perez@email.com', '192.168.1.1', 'xX_Alias_Xx')." },
+                            "target_type": { "type": "string", "description": "Tipo de objetivo: Domain, IP, Email, Username, Phone, File, Hash, Other." },
+                            "category": { "type": "string", "description": "Categoría: 'Technical' o 'Person'." },
+                            "attributes": { "type": "string", "description": "JSON string con pares clave-valor de hallazgos (ej: '{\"ASN\": \"1234\", \"Proveedor\": \"Telecom\"}')." }
                         },
-                        "required": ["target"]
+                        "required": ["name", "target_type", "category"]
                     }
                 }
             }),
             json!({
                 "type": "function",
                 "function": {
-                    "name": "whois",
-                    "description": "Obtiene información de registro de dominio.",
+                    "name": "report_activity",
+                    "description": "Informa un progreso técnico o hallazgo para el Log de Actividad (no para el chat).",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "target": { "type": "string", "description": "Dominio" }
+                            "message": { "type": "string", "description": "Descripción del progreso o evento técnico." },
+                            "level": { "type": "string", "description": "Nivel del log: INFO, SUCCESS, WARN.", "enum": ["INFO", "SUCCESS", "WARN"] }
                         },
-                        "required": ["target"]
-                    }
-                }
-            }),
-            // ... (Abreviado para limpieza, añadiré todas las tools)
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "dns",
-                    "description": "Busca registros DNS/IP.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "target": { "type": "string", "description": "Dominio" }
-                        },
-                        "required": ["target"]
+                        "required": ["message", "level"]
                     }
                 }
             }),
             json!({
                 "type": "function",
                 "function": {
-                    "name": "web_scrape_search",
-                    "description": "Busca información en la web sobre una persona o tema.",
+                    "name": "run_wsl_command",
+                    "description": "Ejecuta un comando de Linux en WSL (Kali Linux). Útil para comandos como whois, dig, nmap o herramientas OSINT nativas de Linux.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": { "type": "string", "description": "Consulta de búsqueda" }
+                            "command": { "type": "string", "description": "El comando completo a ejecutar en la bash de Kali (ej: 'whois google.com')." }
                         },
-                        "required": ["query"]
-                    }
-                }
-            }),
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "browse_url",
-                    "description": "Visita una URL con un navegador y extrae el texto.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "url": { "type": "string", "description": "URL completa" }
-                        },
-                        "required": ["url"]
-                    }
-                }
-            }),
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "generate_dorks",
-                    "description": "Genera Google Dorks para investigar.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "target": { "type": "string", "description": "Nombre objetivo" }
-                        },
-                        "required": ["target"]
-                    }
-                }
-            }),
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "social_search",
-                    "description": "Barrido en redes sociales principales.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "target": { "type": "string", "description": "Nombre o Alias" }
-                        },
-                        "required": ["target"]
-                    }
-                }
-            }),
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "search_username",
-                    "description": "Busca nombre de usuario en múltiples plataformas.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "username": { "type": "string", "description": "Username" }
-                        },
-                        "required": ["username"]
-                    }
-                }
-            }),
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "search_leaks",
-                    "description": "Busca en filtraciones de datos.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "target": { "type": "string", "description": "Email o Username" }
-                        },
-                        "required": ["target"]
-                    }
-                }
-            }),
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "dark_search",
-                    "description": "Busca en la Dark Web (.onion).",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": { "type": "string", "description": "Consulta" }
-                        },
-                        "required": ["query"]
-                    }
-                }
-            }),
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "ip_intel",
-                    "description": "Información geográfica e ISP de IP.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "ip": { "type": "string", "description": "IP" }
-                        },
-                        "required": ["ip"]
-                    }
-                }
-            }),
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "shodan_intel",
-                    "description": "Consulta Shodan para puertos y vulnerabilidades.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "ip": { "type": "string", "description": "IP" }
-                        },
-                        "required": ["ip"]
-                    }
-                }
-            }),
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "manage_target",
-                    "description": "Crea o actualiza una ficha de inteligencia para un objetivo (Persona, Dominio, IP, Email). Úsalo para guardar hallazgos confirmados.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "name": { "type": "string", "description": "Nombre del objetivo o dominio" },
-                            "target_type": { "type": "string", "enum": ["Person", "Domain", "IP", "Email", "Other"], "description": "Tipo de objetivo" },
-                            "key": { "type": "string", "description": "Clave del dato (ej: 'IP', 'DNS', 'Empresa')" },
-                            "value": { "type": "string", "description": "Valor del dato" },
-                            "category": { "type": "string", "enum": ["Technical", "Personal"], "description": "Categoría del dato" }
-                        },
-                        "required": ["name", "target_type", "key", "value", "category"]
-                    }
-                }
-            }),
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "get_targets",
-                    "description": "Obtiene la lista de objetivos (fichas) guardados en esta investigación.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    }
-                }
-            }),
-            json!({
-                "type": "function",
-                "function": {
-                    "name": "link_targets",
-                    "description": "Establece un vínculo relacional entre dos objetivos (ej: 'Dueño de', 'Publicado en').",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "source_id": { "type": "string", "description": "ID del objetivo origen" },
-                            "target_id": { "type": "string", "description": "ID del objetivo destino" },
-                            "relation": { "type": "string", "description": "Tipo de relación (ej: 'Vínculo técnico', 'Asociado a')" }
-                        },
-                        "required": ["source_id", "target_id", "relation"]
+                        "required": ["command"]
                     }
                 }
             }),
         ];
 
+        // Enviar al modelo
         let body = json!({
             "model": self.model,
             "messages": messages,
-            "stream": false,
-            "tools": tools
+            "tools": tools,
+            "stream": false
         });
+
+        if self.abort_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            return AgentResponse::Error("Operación abortada por el usuario.".to_string());
+        }
 
         let resp = self.client.post(url).json(&body).send().await;
 
@@ -392,52 +243,49 @@ impl Agent {
                     }
                 };
 
-                // Parsear respuesta (formato OpenAI compatible de Ollama)
+                // Parsear respuesta de texto
+                // Parsear respuesta de Ollama
                 if let Some(message) = json_resp.get("message") {
-                    // 1. Tool Calls
-                    if let Some(tool_calls) = message.get("tool_calls").and_then(|tc| tc.as_array())
-                    {
-                        let mut parsed_calls = Vec::new();
-
+                    // Caso 1: Llamada a Herramientas
+                    if let Some(tool_calls) = message.get("tool_calls").and_then(|t| t.as_array()) {
+                        let mut calls = Vec::new();
                         for call in tool_calls {
                             if let Some(func) = call.get("function") {
                                 let name = func
                                     .get("name")
                                     .and_then(|n| n.as_str())
-                                    .unwrap_or("unknown")
-                                    .to_string();
-                                let args_val = func.get("arguments");
+                                    .unwrap_or_default();
+                                let args_val = func.get("arguments").cloned().unwrap_or(json!({}));
 
+                                // Ollama a veces manda argumentos como string JSON, otros como objeto
                                 let mut arguments = HashMap::new();
-                                if let Some(args_obj) = args_val.and_then(|a| a.as_object()) {
-                                    for (k, v) in args_obj {
-                                        arguments.insert(
-                                            k.clone(),
-                                            v.as_str().unwrap_or(&v.to_string()).to_string(),
-                                        );
+                                if let Some(obj) = args_val.as_object() {
+                                    for (k, v) in obj {
+                                        arguments
+                                            .insert(k.clone(), v.to_string().replace("\"", ""));
+                                    }
+                                } else if let Some(s) = args_val.as_str() {
+                                    if let Ok(obj) = serde_json::from_str::<
+                                        HashMap<String, serde_json::Value>,
+                                    >(s)
+                                    {
+                                        for (k, v) in obj {
+                                            arguments.insert(k, v.to_string().replace("\"", ""));
+                                        }
                                     }
                                 }
 
-                                parsed_calls.push(ToolCall {
-                                    tool_name: name,
+                                calls.push(ToolCall {
+                                    tool_name: name.to_string(),
                                     arguments,
                                 });
                             }
                         }
-
-                        if !parsed_calls.is_empty() {
-                            return AgentResponse::Tools(parsed_calls);
-                        }
+                        return AgentResponse::Tools(calls);
                     }
 
-                    // 2. Content (Check for JSON tool calls if explicit tool_calls are missing)
+                    // Caso 2: Respuesta de texto
                     if let Some(content) = message.get("content").and_then(|c| c.as_str()) {
-                        let fallback_tools = Self::parse_tools_from_content(content);
-
-                        if !fallback_tools.is_empty() {
-                            return AgentResponse::Tools(fallback_tools);
-                        }
-
                         return AgentResponse::Text(content.to_string());
                     }
                 }
@@ -446,60 +294,5 @@ impl Agent {
             }
             Err(e) => AgentResponse::Error(format!("Error de conexión con Ollama: {}", e)),
         }
-    }
-
-    pub fn parse_tools_from_content(content: &str) -> Vec<ToolCall> {
-        let mut fallback_tools = Vec::new();
-        let mut remaining = content;
-        while let Some(start) = remaining.find('{') {
-            let mut brace_count = 0;
-            let mut end = None;
-
-            for (i, c) in remaining[start..].char_indices() {
-                if c == '{' {
-                    brace_count += 1;
-                } else if c == '}' {
-                    brace_count -= 1;
-                }
-
-                if brace_count == 0 {
-                    end = Some(start + i);
-                    break;
-                }
-            }
-
-            if let Some(e) = end {
-                let json_str = &remaining[start..=e];
-                if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    let name = json_val
-                        .get("name")
-                        .or(json_val.get("tool"))
-                        .and_then(|n| n.as_str());
-                    if let Some(tool_name) = name {
-                        let mut arguments = HashMap::new();
-                        let args_src = json_val
-                            .get("args")
-                            .or(json_val.get("parameters"))
-                            .or(json_val.get("arguments"));
-                        if let Some(args_obj) = args_src.and_then(|a| a.as_object()) {
-                            for (k, v) in args_obj {
-                                arguments.insert(
-                                    k.clone(),
-                                    v.as_str().unwrap_or(&v.to_string()).to_string(),
-                                );
-                            }
-                        }
-                        fallback_tools.push(ToolCall {
-                            tool_name: tool_name.to_string(),
-                            arguments,
-                        });
-                    }
-                }
-                remaining = &remaining[e + 1..];
-            } else {
-                break;
-            }
-        }
-        fallback_tools
     }
 }

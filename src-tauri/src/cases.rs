@@ -13,6 +13,10 @@ pub enum TargetType {
     Domain,
     IP,
     Email,
+    Username,
+    Phone,
+    File,
+    Hash,
     Other,
 }
 
@@ -27,9 +31,19 @@ pub struct Target {
     pub id: String,
     pub name: String,
     pub target_type: TargetType,
+    pub category: String, // Nueva categoría persistente
     pub data: HashMap<String, String>,
     pub linked_targets: Vec<TargetLink>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LogEntry {
+    pub id: String,
+    pub timestamp: String,
+    pub level: String,
+    pub message: String,
+    pub tool_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -64,10 +78,16 @@ impl CaseManager {
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 type TEXT NOT NULL,
+                category TEXT,
+                metadata TEXT, -- JSON con atributos flexibles
                 created_at TEXT NOT NULL
             )",
             [],
         )?;
+
+        // Intentar añadir columnas si la tabla ya existía (migración liviana)
+        let _ = conn.execute("ALTER TABLE targets ADD COLUMN category TEXT", []);
+        let _ = conn.execute("ALTER TABLE targets ADD COLUMN metadata TEXT", []);
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS attributes (
@@ -87,6 +107,17 @@ impl CaseManager {
                 relation TEXT,
                 FOREIGN KEY(source_id) REFERENCES targets(id),
                 FOREIGN KEY(target_id) REFERENCES targets(id)
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS activity_log (
+                id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                level TEXT NOT NULL, -- 'INFO', 'WARN', 'SUCCESS'
+                message TEXT NOT NULL,
+                tool_name TEXT
             )",
             [],
         )?;
@@ -229,6 +260,11 @@ impl CaseManager {
         target: Target,
         category: &str,
     ) -> Result<(), String> {
+        // VALIDACIÓN DE INTEGRIDAD
+        if target.name.trim().is_empty() || target.name.to_lowercase() == "sin nombre" {
+            return Err("El objetivo debe tener un nombre válido para ser guardado.".to_string());
+        }
+
         let conn = self.get_db_conn(case_name).map_err(|e| {
             eprintln!("ERROR [cases]: DB connection failure: {}", e);
             "No se pudo conectar con la base de datos de inteligencia.".to_string()
@@ -237,64 +273,93 @@ impl CaseManager {
         let t_type = format!("{:?}", target.target_type);
         let now = Utc::now().to_rfc3339();
 
+        // Convertir el HashMap de data a JSON string
+        let metadata_json =
+            serde_json::to_string(&target.data).unwrap_or_else(|_| "{}".to_string());
+
         conn.execute(
-            "INSERT INTO targets (id, name, type, created_at) 
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(id) DO UPDATE SET name=?2, type=?3",
-            params![target.id, target.name, t_type, now],
+            "INSERT INTO targets (id, name, type, category, metadata, created_at) 
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET name=?2, type=?3, category=?4, metadata=?5",
+            params![target.id, target.name, t_type, category, metadata_json, now],
         )
         .map_err(|e| {
             eprintln!("ERROR [cases]: Upsert target failure: {}", e);
             "Error al guardar el objetivo en la base de datos.".to_string()
         })?;
 
-        // Guardar atributos
-        for (k, v) in target.data {
-            conn.execute(
-                "INSERT INTO attributes (target_id, key, value, category) VALUES (?1, ?2, ?3, ?4)",
-                params![target.id, k, v, category],
-            )
-            .map_err(|e| {
-                eprintln!("ERROR [cases]: Insert attribute failure: {}", e);
-                "Error al guardar los atributos del objetivo.".to_string()
-            })?;
-        }
+        Ok(())
+    }
+
+    pub fn delete_target(&self, case_name: &str, target_id: &str) -> Result<(), String> {
+        let conn = self.get_db_conn(case_name).map_err(|e| e.to_string())?;
+
+        // 1. Borrar vínculos donde sea el origen o el destino
+        conn.execute(
+            "DELETE FROM links WHERE source_id = ?1 OR target_id = ?1",
+            params![target_id],
+        )
+        .map_err(|e| format!("Error eliminando vínculos del objetivo: {}", e))?;
+
+        // 2. Borrar atributos
+        conn.execute(
+            "DELETE FROM attributes WHERE target_id = ?1",
+            params![target_id],
+        )
+        .map_err(|e| format!("Error eliminando atributos del objetivo: {}", e))?;
+
+        // 3. Borrar el objetivo propiamente dicho
+        conn.execute("DELETE FROM targets WHERE id = ?1", params![target_id])
+            .map_err(|e| format!("Error eliminando el objetivo: {}", e))?;
 
         Ok(())
     }
 
     pub fn get_targets(&self, case_name: &str) -> Result<Vec<Target>, String> {
         let conn = self.get_db_conn(case_name).map_err(|e| e.to_string())?;
+
         let mut stmt = conn
-            .prepare("SELECT id, name, type, created_at FROM targets")
+            .prepare("SELECT id, name, type, category, metadata, created_at FROM targets")
             .map_err(|e| e.to_string())?;
 
         let target_rows = stmt
             .query_map([], |row| {
                 let id: String = row.get(0)?;
                 let name: String = row.get(1)?;
-                let t_type_str: String = row.get(2)?;
-                let created_at_str: String = row.get(3)?;
+                let type_str: String = row.get(2)?;
+                let category: String = row.get(3).unwrap_or_else(|_| "Technical".to_string());
+                let metadata_str: Option<String> = row.get(4).ok();
+                let created_at: String = row.get(5)?;
 
-                let target_type = match t_type_str.as_str() {
-                    "Person" => TargetType::Person,
+                let target_type = match type_str.as_str() {
                     "Domain" => TargetType::Domain,
                     "IP" => TargetType::IP,
                     "Email" => TargetType::Email,
+                    "Username" => TargetType::Username,
+                    "Phone" => TargetType::Phone,
+                    "File" => TargetType::File,
+                    "Hash" => TargetType::Hash,
+                    "Person" => TargetType::Person,
                     _ => TargetType::Other,
                 };
 
-                let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
+                let mut data = HashMap::new();
+                if let Some(m_str) = metadata_str {
+                    if let Ok(parsed) = serde_json::from_str::<HashMap<String, String>>(&m_str) {
+                        data = parsed;
+                    }
+                }
 
                 Ok(Target {
                     id,
                     name,
                     target_type,
-                    data: HashMap::new(),
-                    linked_targets: Vec::new(),
-                    created_at,
+                    category,
+                    data,
+                    linked_targets: vec![],
+                    created_at: DateTime::parse_from_rfc3339(&created_at)
+                        .unwrap_or_else(|_| Utc::now().into())
+                        .with_timezone(&Utc),
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -302,21 +367,6 @@ impl CaseManager {
         let mut targets = Vec::new();
         for t_res in target_rows {
             let mut target = t_res.map_err(|e| e.to_string())?;
-
-            // Cargar atributos para este target
-            let mut attr_stmt = conn
-                .prepare("SELECT key, value FROM attributes WHERE target_id = ?1")
-                .map_err(|e| e.to_string())?;
-            let attr_rows = attr_stmt
-                .query_map(params![target.id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(|e| e.to_string())?;
-
-            for attr in attr_rows {
-                let (k, v) = attr.map_err(|e| e.to_string())?;
-                target.data.insert(k, v);
-            }
 
             // Cargar links para este target (donde target es source)
             let mut link_stmt = conn
@@ -343,6 +393,7 @@ impl CaseManager {
         Ok(targets)
     }
 
+    #[allow(dead_code)]
     pub fn add_link(
         &self,
         case_name: &str,
@@ -765,5 +816,50 @@ impl CaseManager {
         )
         .map_err(|e| format!("Error removing nickname: {}", e))?;
         Ok(())
+    }
+
+    pub fn log_event(
+        &self,
+        case_name: &str,
+        level: &str,
+        message: &str,
+        tool: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.get_db_conn(case_name).map_err(|e| e.to_string())?;
+        let now = Utc::now().to_rfc3339();
+        let id = uuid::Uuid::new_v4().to_string();
+
+        conn.execute(
+            "INSERT INTO activity_log (id, timestamp, level, message, tool_name) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, now, level, message, tool],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn get_activity_log(&self, case_name: &str) -> Result<Vec<LogEntry>, String> {
+        let conn = self.get_db_conn(case_name).map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT id, timestamp, level, message, tool_name FROM activity_log ORDER BY timestamp DESC LIMIT 50")
+            .map_err(|e| e.to_string())?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(LogEntry {
+                    id: row.get(0)?,
+                    timestamp: row.get(1)?,
+                    level: row.get(2)?,
+                    message: row.get(3)?,
+                    tool_name: row.get(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut logs = Vec::new();
+        for r in rows {
+            if let Ok(l) = r {
+                logs.push(l);
+            }
+        }
+        Ok(logs)
     }
 }

@@ -9,6 +9,10 @@
   let isLoading = $state(false);
   let error = $state(null);
 
+  // Detail Modal State
+  let showDetailModal = $state(false);
+  let viewingPerson = $state(null);
+
   // Modal Person State
   let showPersonModal = $state(false);
   let editingPerson = $state(null); // Full person object
@@ -17,10 +21,17 @@
   // Modal Technical Target State
   let showTechModal = $state(false);
   let techFormData = $state({
+      id: null,
       name: "",
       type: "Domain", // Domain, IP, Email, Other
-      category: "Technical"
+      category: "Technical",
+      data: {}, // Para atributos clave-valor
+      created_at: null
   });
+
+  // Temporales para el input de hallazgos
+  let newTechKey = $state("");
+  let newTechVal = $state("");
   
   // Person Basic Form
   let basicFormData = $state({
@@ -206,12 +217,13 @@
 
   async function handleSaveTechTarget() {
       const payload = {
-          id: crypto.randomUUID(),
+          id: techFormData.id || crypto.randomUUID(),
           name: techFormData.name,
           target_type: techFormData.type,
-          data: {}, 
+          category: techFormData.category, // Agregado aquí dentro del objeto Target
+          data: techFormData.data, 
           linked_targets: [],
-          created_at: new Date().toISOString()
+          created_at: techFormData.created_at || new Date().toISOString()
       };
       
       const res = await invoke("create_target_cmd", {
@@ -222,11 +234,35 @@
       
       if(res.success) {
           showTechModal = false;
-          techFormData.name = "";
+          techFormData = { id: null, name: "", type: "Domain", category: "Technical", data: {}, created_at: null };
           loadData();
       } else {
           alert("Error: " + res.error);
       }
+  }
+
+  async function handleDeleteTechTarget(id) {
+      if(!confirm("¿Seguro que querés borrar este objetivo técnico? Se perderán todos sus hallazgos asociados.")) return;
+      try {
+          const res = await invoke("delete_target_cmd", {
+              caseName: agentStore.activeCase.name,
+              targetId: id
+          });
+          if(res.success) loadData();
+          else alert("Error: " + res.error);
+      } catch(e) { alert("Error: " + e); }
+  }
+
+  function openEditTechModal(t) {
+      techFormData = {
+          id: t.id,
+          name: t.name,
+          type: t.target_type,
+          category: "Technical", // Por defecto
+          data: { ...t.data },
+          created_at: t.created_at
+      };
+      showTechModal = true;
   }
 
   // --- UI HELPERS ---
@@ -252,15 +288,23 @@
     showPersonModal = true;
   }
 
+  function openDetailModal(p) {
+      viewingPerson = p;
+      showDetailModal = true;
+  }
+
   function closeModal() {
     showPersonModal = false;
     showTechModal = false;
+    showDetailModal = false; // Also close detail modal
   }
 
   $effect(() => {
     if(agentStore.activeCase) loadData();
   });
 </script>
+
+<svelte:body class:printing={showDetailModal} />
 
 <div class="targets-view">
   <div class="view-header">
@@ -281,7 +325,8 @@
         {:else}
             <div class="grid">
                 {#each persons as p}
-                    <div class="card person-card">
+                    <!-- svelte-ignore a11y_click_events_have_key_events -->
+                    <div class="card person-card" role="button" tabindex="0" onclick={() => openDetailModal(p)}>
                         <div class="card-header">
                             <h3>
                                 {#if p.first_name}
@@ -293,8 +338,8 @@
                                 {/if}
                             </h3>
                             <div class="actions">
-                                <button class="btn-icon" onclick={() => openEditPersonModal(p)}>✏️</button>
-                                <button class="btn-icon delete" onclick={() => handleDeletePerson(p.id)}>🗑️</button>
+                                <button class="btn-icon" onclick={(e) => { e.stopPropagation(); openEditPersonModal(p); }}>✏️</button>
+                                <button class="btn-icon delete" onclick={(e) => { e.stopPropagation(); handleDeletePerson(p.id); }}>🗑️</button>
                             </div>
                         </div>
                         <div class="card-body">
@@ -328,8 +373,19 @@
                     {#each technicalTargets as t}
                         <tr>
                             <td><span class="type-badge">{t.target_type}</span></td>
-                            <td>{t.name}</td>
+                            <td>
+                                <div><strong>{t.name}</strong></div>
+                                <div class="target-data-preview">
+                                    {#each Object.entries(t.data) as [key, value]}
+                                        <small class="data-tag"><b>{key}:</b> {value}</small>
+                                    {/each}
+                                </div>
+                            </td>
                             <td>{new Date(t.created_at).toLocaleDateString()}</td>
+                            <td class="table-actions">
+                                <button class="btn-icon" onclick={() => openEditTechModal(t)}>✏️</button>
+                                <button class="btn-icon delete" onclick={() => handleDeleteTechTarget(t.id)}>🗑️</button>
+                            </td>
                         </tr>
                     {/each}
                 </tbody>
@@ -340,6 +396,102 @@
         </div>
     {/if}
   </div>
+
+  <!-- PERSON DETAIL MODAL (FICHA) -->
+  {#if showDetailModal && viewingPerson}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="modal-backdrop detail-backdrop" role="button" tabindex="-1" onclick={() => showDetailModal = false}>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div class="modal detail-modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+            <div class="detail-header-actions no-print">
+                <button class="btn-secondary" onclick={() => window.print()}>🖨️ Imprimir / Guardar PDF</button>
+                <button class="btn-icon" onclick={() => showDetailModal = false}>❌</button>
+            </div>
+            
+            <div class="ficha-content">
+                <div class="ficha-header">
+                    <div class="ficha-title">FICHA DE DATOS PERSONALES</div>
+                    <div class="ficha-meta">
+                        <span>ID: {viewingPerson.id.split('-')[0]}...</span>
+                        <span>Caso: {agentStore.activeCase?.name || "N/A"}</span>
+                    </div>
+                </div>
+
+                <div class="ficha-body">
+                    <div class="section identity">
+                        <h4>IDENTIDAD</h4>
+                        <div class="data-grid">
+                            <div class="data-item"><strong>Nombre:</strong> {viewingPerson.first_name || "-"}</div>
+                            <div class="data-item"><strong>Apellido:</strong> {viewingPerson.last_name || "-"}</div>
+                            <div class="data-item"><strong>DNI / ID:</strong> {viewingPerson.dni || "-"}</div>
+                            <div class="data-item"><strong>Nacimiento:</strong> {viewingPerson.birth_date || "-"}</div>
+                            <div class="data-item full">
+                                <strong>Apodos / Alias:</strong> 
+                                {#if viewingPerson.nicknames && viewingPerson.nicknames.length > 0}
+                                    {viewingPerson.nicknames.map(n => n.value).join(", ")}
+                                {:else}
+                                    -
+                                {/if}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="section contact">
+                        <h4>CONTACTO</h4>
+                        <div class="data-grid">
+                            <div class="data-item"><strong>Email:</strong> {viewingPerson.email || "-"}</div>
+                            <div class="data-item"><strong>Teléfono:</strong> {viewingPerson.phone || "-"}</div>
+                        </div>
+                    </div>
+
+                    <div class="section">
+                        <h4>UBICACIONES ({viewingPerson.addresses.length})</h4>
+                        {#if viewingPerson.addresses.length > 0}
+                            <ul class="clean-list">
+                                {#each viewingPerson.addresses as addr}
+                                    <li>{addr.street} {addr.number}, {addr.locality}, {addr.state}, {addr.country} (CP: {addr.zip_code})</li>
+                                {/each}
+                            </ul>
+                        {:else}
+                            <p class="empty-text">No hay direcciones registradas.</p>
+                        {/if}
+                    </div>
+
+                    <div class="section">
+                        <h4>HISTORIAL LABORAL ({viewingPerson.jobs.length})</h4>
+                        {#if viewingPerson.jobs.length > 0}
+                            <ul class="clean-list">
+                                {#each viewingPerson.jobs as job}
+                                    <li><strong>{job.title}</strong> en {job.company} ({job.date_start || "?"} - {job.date_end || "Presente"})</li>
+                                {/each}
+                            </ul>
+                        {:else}
+                            <p class="empty-text">No hay empleos registrados.</p>
+                        {/if}
+                    </div>
+
+                     <div class="section">
+                        <h4>HUELLA DIGITAL ({viewingPerson.social_profiles.length})</h4>
+                        {#if viewingPerson.social_profiles.length > 0}
+                            <ul class="clean-list">
+                                {#each viewingPerson.social_profiles as soc}
+                                    <li><strong>{soc.platform}:</strong> {soc.username} ({soc.url})</li>
+                                {/each}
+                            </ul>
+                        {:else}
+                            <p class="empty-text">No hay perfiles sociales registrados.</p>
+                        {/if}
+                    </div>
+                </div>
+
+                <div class="ficha-footer">
+                    Generado por OSINT Dashboard - {new Date().toLocaleString()}
+                </div>
+            </div>
+        </div>
+    </div>
+  {/if}
 
   <!-- PERSON MODAL -->
   {#if showPersonModal}
@@ -463,7 +615,7 @@
   {#if showTechModal}
      <div class="modal-backdrop">
         <div class="modal">
-            <h3>Nuevo Objetivo Técnico</h3>
+            <h3>{techFormData.id ? "Editar Objetivo" : "Nuevo Objetivo Técnico"}</h3>
              <form onsubmit={(e) => { e.preventDefault(); handleSaveTechTarget(); }}>
                 <div class="form-group">
                     <label for="t_type">Tipo</label>
@@ -471,6 +623,10 @@
                         <option value="Domain">Dominio</option>
                         <option value="IP">IP</option>
                         <option value="Email">Email</option>
+                        <option value="Username">Usuario / Alias</option>
+                        <option value="Phone">Teléfono</option>
+                        <option value="File">Archivo</option>
+                        <option value="Hash">Hash</option>
                         <option value="Other">Otro</option>
                     </select>
                 </div>
@@ -478,6 +634,37 @@
                     <label for="t_identifier">Identificador (Nombre/IP/Email)</label>
                     <input id="t_identifier" type="text" required bind:value={techFormData.name} />
                 </div>
+
+                {#if techFormData.id}
+                    <div class="form-group" style="margin-top: 15px;">
+                        <span class="section-label">Datos Técnicos (Hallazgos)</span>
+                        <div class="tech-data-editor">
+                            {#each Object.entries(techFormData.data) as [key, value]}
+                                <div class="data-edit-row">
+                                    <input type="text" readonly value={key} style="width: 40%; background: var(--bg-tertiary);" />
+                                    <input type="text" bind:value={techFormData.data[key]} style="width: 50%;" />
+                                    <button type="button" class="btn-icon delete" onclick={() => {
+                                        const newData = { ...techFormData.data };
+                                        delete newData[key];
+                                        techFormData.data = newData;
+                                    }}>×</button>
+                                </div>
+                            {/each}
+                            <div class="data-add-row" style="margin-top: 10px; display: flex; gap: 5px;">
+                                <input type="text" placeholder="Clave (ej: ASN)" style="width: 40%;" bind:value={newTechKey} />
+                                <input type="text" placeholder="Valor" style="width: 50%;" bind:value={newTechVal} />
+                                <button type="button" class="btn-small" onclick={() => {
+                                    if(newTechKey && newTechVal) {
+                                        techFormData.data = { ...techFormData.data, [newTechKey]: newTechVal };
+                                        newTechKey = "";
+                                        newTechVal = "";
+                                    }
+                                }}>+</button>
+                            </div>
+                        </div>
+                    </div>
+                {/if}
+
                 <div class="modal-actions">
                      <button type="button" class="btn-secondary" onclick={closeModal}>Cancelar</button>
                     <button type="submit" class="btn-primary">Guardar</button>
@@ -497,14 +684,22 @@
   .toolbar { margin-bottom: 15px; display: flex; justify-content: flex-end; }
   
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; }
-  .card { background: var(--bg-secondary); border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; }
+  .card { background: var(--bg-secondary); border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; }
+  .card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.2); border-color: var(--accent-color); }
+
   .card-header { display: flex; justify-content: space-between; margin-bottom: 10px; }
   .badges { display: flex; gap: 10px; margin-top: 10px; }
   .badge { background: var(--bg-tertiary); padding: 2px 8px; border-radius: 12px; font-size: 0.8rem; }
   
   .table-container table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border-color); }
+  .table-actions { text-align: right; width: 100px; }
+  .target-data-preview { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+  .data-tag { background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px; font-size: 0.75rem; border: 1px solid var(--border-color); }
   .type-badge { background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; }
+
+  .tech-data-editor .data-edit-row { display: flex; gap: 5px; margin-bottom: 5px; align-items: center; }
+  .form-group label { display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 5px; cursor: pointer; }
 
   /* Modals */
   .modal-backdrop { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); display: flex; justify-content: center; align-items: center; z-index: 999; }
@@ -535,4 +730,114 @@
   .tags-input .input-wrapper { flex: 1; min-width: 120px; display: flex; gap: 5px; }
   .tags-input input { border: none; background: transparent; padding: 5px; outline: none; flex: 1; }
   .p-1 { padding: 2px 6px; font-size: 0.7rem; }
+
+  /* FICHA DE DATOS & PRINT STYLES */
+  .detail-modal { width: 800px; max-width: 95vw; background: white; color: #333; height: 90vh; overflow-y: auto; display: flex; flex-direction: column; }
+  .detail-header-actions { display: flex; justify-content: space-between; padding-bottom: 15px; border-bottom: 1px solid #eee; margin-bottom: 20px; }
+  
+  .ficha-content { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; flex: 1; }
+  .ficha-header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #333; padding-bottom: 10px; }
+  .ficha-title { font-size: 1.8rem; font-weight: bold; margin-bottom: 5px; text-transform: uppercase; }
+  .ficha-meta { font-size: 0.9rem; color: #666; display: flex; justify-content: center; gap: 20px; }
+  
+  .ficha-body .section { margin-bottom: 25px; }
+  .ficha-body h4 { background: #eee; color: #222; font-weight: bold; padding: 8px 10px; margin: 0 0 10px 0; font-size: 1rem; text-transform: uppercase; border-left: 4px solid #333; }
+  
+  .data-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .data-item.full { grid-column: span 2; }
+  
+  .clean-list { list-style: none; padding: 0; margin: 0; }
+  .clean-list li { padding: 5px 0; border-bottom: 1px dotted #ccc; }
+  .clean-list li:last-child { border-bottom: none; }
+  
+  .ficha-footer { margin-top: 40px; border-top: 1px solid #eee; padding-top: 10px; text-align: center; font-size: 0.8rem; color: #999; }
+  .empty-text { font-style: italic; color: #888; margin: 5px 0; }
+
+  /* --- SISTEMA DE IMPRESIÓN (Estrategia de Visibilidad Inversa) --- */
+  @media print {
+    @page { 
+      margin: 0 !important; 
+    }
+
+    /* 1. Ocultar ABSOLUTAMENTE TODO en la página */
+    :global(body *) {
+      visibility: hidden !important;
+    }
+
+    /* 2. Habilitar la visibilidad de los contenedores estructurales */
+    /* Pero sin que se vea su contenido (esto es clave) */
+    :global(body),
+    :global(.app-shell),
+    :global(.main-content),
+    :global(.content-scroll),
+    :global(.targets-view) {
+      visibility: visible !important;
+      display: block !important;
+      position: static !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      background: white !important;
+      box-shadow: none !important;
+      border: none !important;
+      width: 100% !important;
+      height: auto !important;
+      overflow: visible !important;
+    }
+
+    /* 3. Mostrar el Modal y TODO su contenido */
+    .detail-backdrop,
+    .detail-backdrop *,
+    .detail-modal,
+    .detail-modal *,
+    .ficha-content,
+    .ficha-content * {
+      visibility: visible !important;
+    }
+
+    /* 4. Asegurar el posicionamiento del modal sobre el resto */
+    .detail-backdrop { 
+      display: block !important;
+      position: absolute !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 100% !important;
+      z-index: 9999999 !important;
+      background: white !important;
+    }
+
+    .detail-modal {
+      box-shadow: none !important;
+      border: none !important;
+      border-radius: 0 !important;
+      background: white !important;
+      width: 100% !important;
+      max-width: none !important;
+      margin: 0 !important;
+    }
+
+    .ficha-content { 
+      padding: 1.5cm 1.5cm 1.5cm 3cm !important; /* Margen izquierdo de 3cm para encuadernación */
+      min-height: 29cm;
+      box-sizing: border-box;
+    }
+
+    /* 5. Forzar la ocultación de elementos que suelen "flotar" o molestar */
+    :global(.sidebar),
+    :global(.agent-container),
+    :global(.top-bar),
+    .no-print {
+      display: none !important;
+      visibility: hidden !important;
+    }
+    
+    .ficha-body h4 { 
+      background: #f0f0f0 !important; 
+      color: #000 !important; 
+      border-left: 4px solid #000 !important;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    ::-webkit-scrollbar { display: none; }
+  }
 </style>

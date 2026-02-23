@@ -19,12 +19,14 @@
 <div class="welcome">
     <div class="welcome__card">
         <div class="welcome__logo-section">
-            <span class="welcome__bot-icon">🤖</span>
-            <h1 class="welcome__brand">Target OSINT<span class="welcome__brand-accent">DASH</span></h1>
+            <div class="welcome__bot-avatar">
+                <img src="/src/assets/bot_sodiic.png" alt="SODIIC_BOT" />
+            </div>
+            <h1 class="welcome__brand">SODIIC</h1>
         </div>
         
         <p class="welcome__intro-text">
-            Bienvenido al centro de inteligencia. Para comenzar a operar, necesitás inicializar una investigación o abrir una existente.
+            Bienvenido al **Sistema de Organización de Investigaciones e Inteligencia Criminal**. Para comenzar a operar, necesitás inicializar una investigación o abrir una existente.
         </p>
 
         {#if !showCreate}
@@ -101,7 +103,25 @@
         gap: 12px;
     }
 
-    .welcome__bot-icon { font-size: 4rem; }
+    .welcome__bot-avatar {
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        overflow: hidden;
+        border: 4px solid var(--accent-color);
+        background: #000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 0 30px rgba(0, 210, 255, 0.3);
+    }
+
+    .welcome__bot-avatar img {
+        width: 200%;
+        height: 200%;
+        object-fit: cover;
+        transform: translate(0, 10%);
+    }
     
     .welcome__brand {
         font-size: 1.5rem;

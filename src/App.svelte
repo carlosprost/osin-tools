@@ -24,6 +24,8 @@
   import TargetsView from "./components/TargetsView.svelte";
   import AgentPanel from "./components/AgentPanel.svelte";
   import WelcomeView from "./components/WelcomeView.svelte";
+  import FloatingBot from "./components/FloatingBot.svelte";
+  import StatusBar from "./components/StatusBar.svelte";
   import { agentStore } from "./lib/agentStore.svelte.js";
 
   let currentView = $state("dashboard");
@@ -95,102 +97,116 @@
 
 <svelte:window onmousemove={onMouseMove} onmouseup={stopResizing} />
 
-<div class="app-shell">
-  <Sidebar bind:currentView />
+  <main class="main-wrapper">
+    <div class="app-shell">
+      <Sidebar bind:currentView />
 
-  {#if !agentStore.activeCase}
-    <WelcomeView />
-  {/if}
+      {#if !agentStore.activeCase}
+        <WelcomeView />
+      {/if}
 
-  <main class="main-content">
-    <TopBar {currentView} />
+      <main class="main-content">
+        <TopBar {currentView} />
 
-    <div class="content-scroll">
-      {#if currentView === "dashboard"}
-        <Dashboard />
-      {:else if currentView === "tools"}
-        {#if !activeToolId}
-          <div class="tools-grid">
-            {#each osintTools as tool (tool.id)}
-              <div
-                class="tool-wrapper"
-                onclick={() => {
-                  if (tool.status !== "development") activeToolId = tool.id;
-                }}
-                onkeydown={(e) =>
-                  e.key === "Enter" &&
-                  tool.status !== "development" &&
-                  (activeToolId = tool.id)}
-                role="button"
-                tabindex="0"
-              >
-                <ToolCard {tool} />
+        <div class="content-scroll">
+          {#if currentView === "dashboard"}
+            <Dashboard />
+          {:else if currentView === "tools"}
+            {#if !activeToolId}
+              <div class="tools-grid">
+                {#each osintTools as tool (tool.id)}
+                  <div
+                    class="tool-wrapper"
+                    onclick={() => {
+                      if (tool.status !== "development") activeToolId = tool.id;
+                    }}
+                    onkeydown={(e) =>
+                      e.key === "Enter" &&
+                      tool.status !== "development" &&
+                      (activeToolId = tool.id)}
+                    role="button"
+                    tabindex="0"
+                  >
+                    <ToolCard {tool} />
+                  </div>
+                {/each}
               </div>
-            {/each}
-          </div>
-        {:else if activeToolId === "ip-lookup"}
-          <IpLookup onBack={() => (activeToolId = null)} />
-        {:else if activeToolId === "username-check"}
-          <UsernameCheck onBack={() => (activeToolId = null)} />
-        {:else if activeToolId === "domain-intel"}
-          <DomainIntel onBack={() => (activeToolId = null)} />
-        {:else if activeToolId === "email-verify"}
-          <EmailVerify onBack={() => (activeToolId = null)} />
-        {:else if activeToolId === "exif-viewer"}
-          <ExifViewer onBack={() => (activeToolId = null)} />
-        {:else if activeToolId === "reverse-image"}
-          <ReverseImageSearch
-            imageUrl={toolParams?.image || ""}
-            onBack={() => {
-              activeToolId = null;
-              toolParams = { image: null };
-            }}
-          />
-        {:else if activeToolId === "domain-email-search"}
-          <DomainEmailSearch onBack={() => (activeToolId = null)} />
-        {:else if activeToolId === "biometric-comparison"}
-          <FaceComparison onBack={() => (activeToolId = null)} />
-        {:else}
-          <div class="placeholder-view">
-            <button class="btn-back" onclick={() => (activeToolId = null)}>← Volver</button>
-            <p>
-              La herramienta <strong>{activeToolId}</strong> está en construcción.
-            </p>
-          </div>
-        {/if}
-      {:else if currentView === "settings"}
-        <Settings />
-      {:else if currentView === "targets"}
-        <TargetsView />
-      {:else}
-        <div class="placeholder-view">
-          <p>
-            El módulo <strong>{currentView}</strong> está actualmente en desarrollo.
-          </p>
+            {:else if activeToolId === "ip-lookup"}
+              <IpLookup onBack={() => (activeToolId = null)} />
+            {:else if activeToolId === "username-check"}
+              <UsernameCheck onBack={() => (activeToolId = null)} />
+            {:else if activeToolId === "domain-intel"}
+              <DomainIntel onBack={() => (activeToolId = null)} />
+            {:else if activeToolId === "email-verify"}
+              <EmailVerify onBack={() => (activeToolId = null)} />
+            {:else if activeToolId === "exif-viewer"}
+              <ExifViewer onBack={() => (activeToolId = null)} />
+            {:else if activeToolId === "reverse-image"}
+              <ReverseImageSearch
+                imageUrl={toolParams?.image || ""}
+                onBack={() => {
+                  activeToolId = null;
+                  toolParams = { image: null };
+                }}
+              />
+            {:else if activeToolId === "domain-email-search"}
+              <DomainEmailSearch onBack={() => (activeToolId = null)} />
+            {:else if activeToolId === "biometric-comparison"}
+              <FaceComparison onBack={() => (activeToolId = null)} />
+            {:else}
+              <div class="placeholder-view">
+                <button class="btn-back" onclick={() => (activeToolId = null)}>← Volver</button>
+                <p>
+                  La herramienta <strong>{activeToolId}</strong> está en construcción.
+                </p>
+              </div>
+            {/if}
+          {:else if currentView === "settings"}
+            <Settings />
+          {:else if currentView === "targets"}
+            <TargetsView />
+          {:else}
+            <div class="placeholder-view">
+              <p>
+                El módulo <strong>{currentView}</strong> está actualmente en desarrollo.
+              </p>
+            </div>
+          {/if}
+        </div>
+      </main>
+      
+      {#if agentStore.isPanelOpen}
+        <div 
+            class="resizer" 
+            onmousedown={startResizing}
+            role="presentation"
+        ></div>
+        <div class="agent-container" style="width: {panelWidth}px">
+            <AgentPanel />
         </div>
       {/if}
+
+      <FloatingBot />
     </div>
+    <StatusBar />
   </main>
-  
-  {#if agentStore.isPanelOpen}
-    <div 
-        class="resizer" 
-        onmousedown={startResizing}
-        role="presentation"
-    ></div>
-    <div class="agent-container" style="width: {panelWidth}px">
-        <AgentPanel />
-    </div>
-  {/if}
-</div>
 
 <style>
-  .app-shell {
+  .main-wrapper {
     display: flex;
+    flex-direction: column;
     height: 100vh;
     width: 100vw;
+    overflow: hidden;
+  }
+
+  .app-shell {
+    flex: 1;
+    display: flex;
+    width: 100%;
     background-color: var(--bg-primary);
     overflow: hidden;
+    position: relative;
   }
 
   .main-content {

@@ -34,8 +34,8 @@
 
 <aside class="sidebar">
   <div class="brand">
-    <span class="logo-icon">Target</span>
-    <span class="logo-text">OSINT<span class="text-accent">DASH</span></span>
+    <span class="logo-icon">🛡️</span>
+    <span class="logo-text">SODIIC</span>
   </div>
 
   <nav class="nav-menu">
@@ -86,8 +86,10 @@
       class="nav-item special-agent"
       onclick={() => agentStore.togglePanel()}
     >
-      <span class="icon">🤖</span>
-      Agente IA
+      <div class="sidebar__bot-avatar">
+        <img src="/src/assets/bot_sodiic.png" alt="SODIIC_BOT" />
+      </div>
+      SODIIC_BOT
     </button>
   </nav>
 
@@ -202,5 +204,28 @@
     border-top: 1px solid var(--border-color);
     padding-top: var(--spacing-md);
     background: linear-gradient(to right, transparent, rgba(16, 185, 129, 0.05));
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .sidebar__bot-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 1px solid var(--accent-color);
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .sidebar__bot-avatar img {
+    width: 200%;
+    height: 200%;
+    object-fit: cover;
+    transform: translate(0, 10%);
   }
 </style>

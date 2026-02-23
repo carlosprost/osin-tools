@@ -23,15 +23,6 @@ class AgentStore {
         this.activeTask.status = event.payload;
       }
     });
-
-    await listen("agent-tool-result", (event) => {
-      const { tool, result } = event.payload;
-      this.messages.push({
-        role: "system",
-        content: `Resultado de ${tool}: ${result}`,
-      });
-      this.saveHistory();
-    });
   }
 
   async loadHistory() {
@@ -152,6 +143,21 @@ class AgentStore {
       this.statusMessage = "Listo";
       this.activeTask = null;
       this.saveHistory();
+    }
+  }
+
+  async abort() {
+    try {
+      await invoke("abort_agent");
+      this.isLoading = false;
+      this.statusMessage = "Interrumpido";
+      this.messages.push({
+        role: "system",
+        content: "🛑 Investigación detenida por el usuario.",
+      });
+      this.saveHistory();
+    } catch (e) {
+      console.error("Error al abortar agente:", e);
     }
   }
 

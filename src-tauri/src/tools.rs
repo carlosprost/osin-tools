@@ -385,6 +385,7 @@ pub async fn ip_intel(ip: String, config: &OsintConfig) -> OsintResult {
     }
 }
 
+#[allow(dead_code)]
 pub async fn browse_url(url: String, config: &OsintConfig) -> OsintResult {
     let config = config.clone();
     let proxy_arg = if !config.proxy_url.is_empty() {
@@ -690,6 +691,7 @@ pub async fn social_search(target: String, config: &OsintConfig) -> OsintResult 
     }
 }
 
+#[allow(dead_code)]
 pub async fn dark_search(query: String, config: &OsintConfig) -> OsintResult {
     let client = get_http_client(config).await;
     // Ahmia es un motor de búsqueda que indexa la Dark Web (.onion)
@@ -792,6 +794,151 @@ pub async fn shodan_intel(ip: String, config: &OsintConfig) -> OsintResult {
                     "Hubo un problema al consultar la base de datos de dispositivos conectados."
                         .into(),
                 ),
+            }
+        }
+    }
+}
+#[allow(dead_code)]
+pub async fn get_system_info() -> OsintResult {
+    let mut info = String::from("📊 **Información de Hardware del Sistema:**\n\n");
+
+    // CPU Info
+    let cpu = AsyncCommand::new("wmic")
+        .args(["cpu", "get", "name"])
+        .output()
+        .await;
+    if let Ok(out) = cpu {
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.contains("Name"))
+            .collect();
+        if let Some(name) = lines.first() {
+            info.push_str(&format!("🔹 **CPU:** {}\n", name.trim()));
+        }
+    }
+
+    // RAM Info
+    let ram = AsyncCommand::new("wmic")
+        .args([
+            "OS",
+            "get",
+            "FreePhysicalMemory,TotalVisibleMemorySize",
+            "/Value",
+        ])
+        .output()
+        .await;
+    if let Ok(out) = ram {
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let mut total = 0u64;
+        let mut free = 0u64;
+        for line in text.lines() {
+            if line.starts_with("TotalVisibleMemorySize=") {
+                total = line
+                    .split('=')
+                    .nth(1)
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+            } else if line.starts_with("FreePhysicalMemory=") {
+                free = line
+                    .split('=')
+                    .nth(1)
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+            }
+        }
+        if total > 0 {
+            info.push_str(&format!(
+                "🔹 **RAM:** {:.2} GB Total ({:.2} GB Libres)\n",
+                total as f64 / 1024.0 / 1024.0,
+                free as f64 / 1024.0 / 1024.0
+            ));
+        }
+    }
+
+    // Disk Info
+    let disks = AsyncCommand::new("wmic")
+        .args(["diskdrive", "get", "model,size,mediatype"])
+        .output()
+        .await;
+    if let Ok(out) = disks {
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        info.push_str("🔹 **Discos:**\n");
+        for line in text.lines().skip(1) {
+            if !line.trim().is_empty() {
+                info.push_str(&format!("  - {}\n", line.trim()));
+            }
+        }
+    }
+
+    OsintResult {
+        success: true,
+        data: info,
+        error: None,
+    }
+}
+
+pub async fn run_wsl_command(command: String, sudo_pass: Option<String>) -> OsintResult {
+    // Detectar si el comando usa sudo para inyectar la contraseña
+    let final_command = if command.contains("sudo ") {
+        match sudo_pass {
+            Some(pass) if !pass.is_empty() => {
+                // Inyectar password vía stdin (-S)
+                format!(
+                    "echo \"{}\" | sudo -S {}",
+                    pass,
+                    command.replace("sudo ", "")
+                )
+            }
+            _ => command, // Intentar sin password si no hay
+        }
+    } else {
+        command
+    };
+
+    // Ejecuta un comando en la distribución WSL por defecto (Kali)
+    let output = AsyncCommand::new("wsl")
+        .args(["-e", "bash", "-c", &final_command])
+        .output()
+        .await;
+
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+
+            let mut data = stdout;
+            if !stderr.is_empty() {
+                if !data.is_empty() {
+                    data.push_str("\n");
+                }
+                data.push_str("--- Error/Output de consola ---\n");
+                data.push_str(&stderr);
+            }
+
+            OsintResult {
+                success: out.status.success(),
+                data: if data.is_empty() {
+                    "El comando se ejecutó pero no devolvió salida.".into()
+                } else {
+                    data
+                },
+                error: if out.status.success() {
+                    None
+                } else {
+                    Some("El comando de Linux (WSL) devolvió un error.".into())
+                },
+            }
+        }
+        Err(e) => {
+            eprintln!("ERROR [system]: WSL invocation failure: {}", e);
+            OsintResult {
+                success: false,
+                data: "".into(),
+                error: Some(format!(
+                    "No se pudo invocar WSL. Asegurate de tener Kali instalado: {}",
+                    e
+                )),
             }
         }
     }

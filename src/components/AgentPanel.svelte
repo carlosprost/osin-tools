@@ -95,8 +95,10 @@
     <aside class="agent-panel">
         <div class="agent-panel__header">
             <div class="agent-panel__header-main">
-                <span class="agent-panel__bot-icon">🤖</span>
-                <h3 class="agent-panel__title">Agente OSINT</h3>
+                <div class="agent-panel__bot-avatar">
+                    <img src="/src/assets/bot_sodiic.png" alt="SODIIC_BOT" />
+                </div>
+                <h3 class="agent-panel__title">SODIIC_BOT</h3>
             </div>
             <button class="agent-panel__close-btn" onclick={() => agentStore.togglePanel()}>✕</button>
         </div>
@@ -174,7 +176,7 @@
                 </button>
             </div>
             {#if agentStore.isLoading}
-                <button class="agent-panel__abort-btn" onclick={() => invoke("abort_agent")}>DETENER AGENTE ⏹</button>
+                <button class="agent-panel__abort-btn" onclick={() => agentStore.abort()}>DETENER AGENTE ⏹</button>
             {/if}
         </div>
     </aside>
@@ -218,8 +220,26 @@
         gap: 12px;
     }
 
-    .agent-panel__bot-icon { font-size: 1.5rem; }
-    .agent-panel__title { font-size: 1rem; margin: 0; }
+    .agent-panel__bot-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        overflow: hidden;
+        border: 2px solid var(--accent-color);
+        background: #000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .agent-panel__bot-avatar img {
+        width: 200%;
+        height: 200%;
+        object-fit: cover;
+        transform: translate(0, 10%);
+    }
+
+    .agent-panel__title { font-size: 1rem; margin: 0; text-transform: uppercase; letter-spacing: 1px; }
 
     .agent-panel__close-btn {
         background: none;

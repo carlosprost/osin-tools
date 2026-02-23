@@ -26,6 +26,7 @@ pub struct OsintConfig {
     pub facebook_session: String,
     pub spotify_client_id: String,
     pub spotify_client_secret: String,
+    pub wsl_sudo_password: String,
 }
 
 impl Default for OsintConfig {
@@ -46,6 +47,7 @@ impl Default for OsintConfig {
             facebook_session: String::new(),
             spotify_client_id: String::new(),
             spotify_client_secret: String::new(),
+            wsl_sudo_password: String::new(),
         }
     }
 }

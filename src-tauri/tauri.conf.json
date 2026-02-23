@@ -1,7 +1,7 @@
 {
-  "productName": "osint-dashboard",
+  "productName": "SODIIC",
   "version": "0.1.0",
-  "identifier": "com.osint.dashboard",
+  "identifier": "com.sodiic.investigacion",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -24,7 +24,7 @@
   "app": {
     "windows": [
       {
-        "title": "OSINT Dashboard",
+        "title": "SODIIC - Sistema de Organización de Investigaciones e Inteligencia Criminal",
         "width": 1200,
         "height": 800
       }

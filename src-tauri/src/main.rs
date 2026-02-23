@@ -8,18 +8,23 @@ mod cases;
 mod commands;
 mod mac_spoof;
 mod models;
+mod secrets;
 mod tools;
 mod tor_manager;
+
+pub struct AgentAbort(pub Arc<std::sync::atomic::AtomicBool>);
 
 fn main() {
     dotenv::dotenv().ok();
     let agent = Agent::new();
+    let abort_flag = agent.abort_flag.clone();
     let tor_state = tor_manager::TorState {
         child: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
         .manage(Mutex::new(agent))
+        .manage(AgentAbort(abort_flag))
         .manage(Mutex::new(models::OsintConfig::default()))
         .manage(tor_state)
         .setup(|app| {
@@ -66,7 +71,13 @@ fn main() {
             commands::remove_social_cmd,
             // Technical Targets
             commands::get_targets_json_cmd,
-            commands::create_target_cmd
+            commands::create_target_cmd,
+            commands::delete_target_cmd,
+            commands::get_activity_log_cmd,
+            // Secrets
+            commands::save_secure_secret,
+            commands::get_secure_secret,
+            commands::delete_secure_secret
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::Destroyed = event {

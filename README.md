@@ -1,4 +1,4 @@
-# OSINT Tools Dashboard 🕵️‍♂️🇦🇷
+# SODIIC - Sistema de Organización de Investigaciones e Inteligencia Criminal 🕵️‍♂️🇦🇷
 
 Bienvenido al ecosistema de inteligencia relacional más avanzado. Este dashboard permite realizar investigaciones OSINT automatizadas, gestionar objetivos y mapear vínculos utilizando un Agente IA autónomo.
 

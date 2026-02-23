@@ -1,11 +1,13 @@
 use crate::agent::{Agent, AgentResponse};
-use crate::cases::{CaseManager, Target};
+use crate::cases::{CaseManager, Target, TargetType};
 use crate::mac_spoof;
 use crate::models::{Address, Job, Nickname, OsintConfig, OsintResult, Person, SocialProfile};
+use crate::secrets;
 use crate::tools;
 use crate::tor_manager;
+use crate::AgentAbort;
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 
@@ -152,20 +154,12 @@ pub async fn set_mac_masking(active: bool) -> Result<OsintResult, String> {
 }
 
 #[tauri::command]
-pub async fn abort_agent(state: State<'_, Mutex<Agent>>) -> Result<(), String> {
-    match state.try_lock() {
-        Ok(agent) => {
-            agent
-                .abort_flag
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        }
-        Err(_) => {
-            // Si no podemos bloquearlo, es que ya está trabajando o bloqueado,
-            // pero el flag es atómico, así que esto es solo preventivo.
-            Err("No se pudo enviar la señal de interrupción al agente.".to_string())
-        }
-    }
+pub async fn abort_agent(abort_state: State<'_, AgentAbort>) -> Result<(), String> {
+    abort_state
+        .inner()
+        .0
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
 }
 
 #[tauri::command]
@@ -175,10 +169,22 @@ pub async fn ask_agent(
     image_path: Option<String>,
     case_name: Option<String>,
     state: State<'_, Mutex<Agent>>,
-    config_lock: State<'_, Mutex<OsintConfig>>,
+    abort_state: State<'_, AgentAbort>,
+    _config_lock: State<'_, Mutex<OsintConfig>>,
     case_manager: State<'_, CaseManager>,
 ) -> Result<OsintResult, String> {
+    // Resetear flag de aborto global al iniciar nueva consulta
+    abort_state
+        .inner()
+        .0
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+
     let mut agent = state.lock().await;
+
+    // Resetear flag de aborto interno
+    agent
+        .abort_flag
+        .store(false, std::sync::atomic::Ordering::SeqCst);
 
     if let Some(case) = &case_name {
         if let Ok(history) = case_manager.load_history(case) {
@@ -188,64 +194,76 @@ pub async fn ask_agent(
         }
     }
 
-    let mut seen_calls = HashSet::new();
-    for h_msg in &agent.history {
-        if h_msg.role == "assistant" || h_msg.role == "model" {
-            if let Ok(json_calls) = serde_json::from_str::<serde_json::Value>(&h_msg.content) {
-                if let Some(calls_array) = json_calls.as_array() {
-                    for call_val in calls_array {
-                        let name = call_val["name"].as_str().unwrap_or_default();
-                        let args = call_val["args"].as_object();
-                        if !name.is_empty() && args.is_some() {
-                            let mut keys: Vec<String> = args
-                                .unwrap()
-                                .values()
-                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                .collect();
-                            keys.sort();
-                            seen_calls.insert(format!("{}:{}", name, keys.join(",")));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Construcción del Contexto Dinámico (Objetivos + Vínculos)
+    // Construcción del Contexto Dinámico (Consultor Estratégico)
     let mut case_context = String::new();
     if let Some(case) = &case_name {
-        if let Ok(targets) = case_manager.get_targets(case) {
-            if !targets.is_empty() {
-                case_context.push_str("OBJETIVOS REGISTRADOS:\n");
-                for t in &targets {
-                    case_context.push_str(&format!(
-                        "- ID: {}, Nombre: {}, Tipo: {:?}\n",
-                        t.id, t.name, t.target_type
-                    ));
-                    if !t.data.is_empty() {
-                        case_context.push_str(&format!("  Datos: {:?}\n", t.data));
-                    }
-                }
+        let mut tech_targets = Vec::new();
+        let mut persons_data = Vec::new();
 
-                case_context.push_str("\nVÍNCULOS:\n");
-                for t in &targets {
-                    for link in &t.linked_targets {
-                        case_context.push_str(&format!(
-                            "- {} -> {} (Rel: {})\n",
-                            t.name, link.target_id, link.relation
-                        ));
-                    }
-                }
-            } else {
-                case_context.push_str("No hay objetivos registrados en este caso aún.");
-            }
+        if let Ok(targets) = case_manager.get_targets(case) {
+            tech_targets = targets;
         }
+
+        if let Ok(persons) = case_manager.get_persons(case) {
+            persons_data = persons;
+        }
+
+        let context_json = json!({
+            "technical_targets": tech_targets,
+            "persons": persons_data
+        });
+
+        case_context = format!(
+            "--- CONTEXTO OPERATIVO (ESTRUCTURADO JSON) ---\n{}\n--------------------------------------------\n",
+            serde_json::to_string_pretty(&context_json).unwrap_or_default()
+        );
     }
 
-    loop {
+    // Loop de razonamiento y ejecución de herramientas
+    let mut current_query: Option<String> = Some(query.clone());
+    let mut iterations = 0;
+    const MAX_ITERATIONS: u32 = 15;
+
+    while iterations < MAX_ITERATIONS {
+        iterations += 1;
+
+        // Chequear interrupción antes de llamar a la IA
+        if abort_state
+            .inner()
+            .0
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(OsintResult {
+                success: false,
+                data: "Interrumpido por el usuario.".into(),
+                error: Some("Abortado".into()),
+            });
+        }
+
         let response = agent
-            .think(Some(&query), image_path.as_deref(), Some(&case_context))
+            .think(
+                current_query.as_deref(),
+                image_path.as_deref(),
+                Some(&case_context),
+            )
             .await;
+
+        // Limpiar current_query después del primer uso (ya estará en el historial si es necesario)
+        if iterations == 1 {
+            // Guardamos el primer input del usuario en el historial para que persista
+            agent.add_message("user", &query);
+            current_query = None;
+        }
+
+        // Si hay un error en Ollama, cortamos
+        if let AgentResponse::Error(e) = response {
+            return Ok(OsintResult {
+                success: false,
+                data: "".into(),
+                error: Some(e),
+            });
+        }
+
         match response {
             AgentResponse::Text(text) => {
                 agent.add_message("assistant", &text);
@@ -261,191 +279,286 @@ pub async fn ask_agent(
                     error: None,
                 });
             }
-            AgentResponse::Tools(tool_calls) => {
-                let tools_json = tool_calls
+            AgentResponse::Tools(calls) => {
+                // IMPORTANTE: Guardar el hecho de que el asistente llamó a estas herramientas
+                let tools_desc = calls
                     .iter()
-                    .map(|tc| json!({"name": tc.tool_name, "args": tc.arguments}))
-                    .collect::<Vec<_>>();
-                agent.add_message("model", &serde_json::json!(tools_json).to_string());
-                let mut tool_outputs = String::new();
+                    .map(|c| format!("Llamando a {}({:?})", c.tool_name, c.arguments))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                agent.add_message("assistant", &format!("[TOOL_CALLS]\n{}", tools_desc));
 
-                for tool in tool_calls {
-                    let name = tool.tool_name.as_str();
-                    let args = tool.arguments;
-                    let mut keys: Vec<_> = args.values().cloned().collect();
-                    keys.sort();
-                    let call_key = format!("{}:{}", name, keys.join(","));
+                let mut tool_results = Vec::new();
 
-                    if seen_calls.contains(&call_key) {
-                        let mut last_result = None;
-                        for h_msg in agent.history.iter().rev() {
-                            if h_msg.content.contains(&format!("Resultado de {}:", name)) {
-                                if let Some(pos) = h_msg.content.find(':') {
-                                    last_result = Some(h_msg.content[pos + 1..].trim().to_string());
-                                    break;
-                                }
+                for call in calls {
+                    // Emitir qué herramienta se está usando
+                    let _ = app.emit("agent-status", format!("Ejecutando {}...", call.tool_name));
+
+                    if call.tool_name == "report_activity" {
+                        if let Some(case) = &case_name {
+                            let msg = call.arguments.get("message").cloned().unwrap_or_default();
+                            let level = call
+                                .arguments
+                                .get("level")
+                                .cloned()
+                                .unwrap_or_else(|| "INFO".to_string());
+                            let _ =
+                                case_manager.log_event(case, &level, &msg, Some("report_activity"));
+                            tool_results.push(
+                                r#"{"status": "OK", "message": "Actividad registrada."}"#
+                                    .to_string(),
+                            );
+                        } else {
+                            tool_results.push(
+                                r#"{"status": "ERROR", "message": "No hay un caso activo para registrar actividad."}"#
+                                    .into(),
+                            );
+                        }
+                    } else if call.tool_name == "run_wsl_command" {
+                        let cmd = call.arguments.get("command").cloned().unwrap_or_default();
+
+                        // Intentar obtener la contraseña sudo del keyring para este comando
+                        let sudo_pass = crate::secrets::get_secret("wsl_sudo_password").ok();
+
+                        let res = crate::tools::run_wsl_command(cmd, sudo_pass).await;
+                        tool_results.push(format!(
+                            r#"{{"status": "{}", "data": "{}"}}"#,
+                            if res.success { "OK" } else { "ERROR" },
+                            res.data.replace("\"", "\\\"")
+                        ));
+                    } else if call.tool_name == "upsert_intelligence" {
+                        if let Some(case) = &case_name {
+                            let name = call.arguments.get("name").cloned().unwrap_or_default();
+                            let t_type_str = call
+                                .arguments
+                                .get("target_type")
+                                .cloned()
+                                .unwrap_or_default();
+                            let category = call
+                                .arguments
+                                .get("category")
+                                .cloned()
+                                .unwrap_or_else(|| "Technical".into());
+
+                            // FILTRO DE RUIDO: No permitir nombres vacíos o genéricos
+                            if name.trim().is_empty() || name.to_lowercase() == "sin nombre" {
+                                tool_results.push(format!(r#"{{"status": "ERROR", "message": "Nombre del objetivo '{}' no es válido. Sé más específico."}}"#, name));
+                                continue;
                             }
-                        }
-                        if let Some(res) = last_result {
-                            tool_outputs
-                                .push_str(&format!("\nResultado de {} (Cache): {}\n", name, res));
-                            agent.add_function_response(name, &res);
-                            continue;
-                        }
-                    }
-                    seen_calls.insert(call_key);
 
-                    let tool_result = match name {
-                        "ping" => {
-                            tools::perform_ping(args.get("target").unwrap_or(&"".into()))
-                                .await
-                                .data
-                        }
-                        "whois" => {
-                            let config = config_lock.lock().await;
-                            tools::perform_whois(args.get("target").unwrap_or(&"".into()), &*config)
-                                .await
-                                .data
-                        }
-                        "dns" => {
-                            tools::perform_dns_lookup(args.get("target").unwrap_or(&"".into()))
-                                .await
-                                .data
-                        }
-                        "web_scrape_search" => {
-                            let q = args.get("query").unwrap_or(&"".into()).to_string();
-                            let config = config_lock.lock().await;
-                            tools::web_scrape_search(q, &*config).await.data
-                        }
-                        "browse_url" => {
-                            let url = args.get("url").unwrap_or(&"".into()).to_string();
-                            let config = config_lock.lock().await;
-                            tools::browse_url(url, &*config).await.data
-                        }
-                        "dark_search" => {
-                            let q = args.get("query").unwrap_or(&"".into()).to_string();
-                            let config = config_lock.lock().await;
-                            tools::dark_search(q, &*config).await.data
-                        }
-                        "manage_target" => {
-                            if let (Some(n), Some(t), Some(k), Some(v), Some(c)) = (
-                                args.get("name"),
-                                args.get("target_type"),
-                                args.get("key"),
-                                args.get("value"),
-                                args.get("category"),
-                            ) {
-                                if let Some(case) = &case_name {
-                                    use crate::cases::{Target, TargetType};
-                                    let tt = match t.as_str() {
-                                        "Person" => TargetType::Person,
-                                        "Domain" => TargetType::Domain,
-                                        "IP" => TargetType::IP,
-                                        "Email" => TargetType::Email,
-                                        _ => TargetType::Other,
-                                    };
-                                    let mut d = HashMap::new();
-                                    d.insert(k.to_string(), v.to_string());
-                                    let targ = Target {
-                                        id: format!(
-                                            "{}-{}",
-                                            n.to_lowercase().replace(' ', "_"),
-                                            t.to_lowercase()
-                                        ),
-                                        name: n.to_string(),
-                                        target_type: tt,
-                                        data: d,
-                                        linked_targets: Vec::new(),
-                                        created_at: chrono::Utc::now(),
-                                    };
-                                    match case_manager.upsert_target_with_cat(case, targ, c) {
-                                        Ok(_) => format!("✅ Ficha actualizada: {}={}", k, v),
-                                        Err(e) => format!("❌ Error: {}", e),
-                                    }
-                                } else {
-                                    "No hay caso activo".to_string()
-                                }
+                            let id = if let Some(id_val) =
+                                call.arguments.get("id").filter(|s| !s.is_empty())
+                            {
+                                id_val.clone()
                             } else {
-                                "Faltan argumentos (name, target_type, key, value, category)"
-                                    .to_string()
+                                // Smart matching integral con lógica Fuzzy básica
+                                let t_match = case_manager
+                                    .get_targets(case)
+                                    .ok()
+                                    .and_then(|targets| {
+                                        targets.into_iter().find(|t| {
+                                            let n = t.name.to_lowercase();
+                                            let query = name.to_lowercase();
+                                            n == query || n.contains(&query) || query.contains(&n)
+                                        })
+                                    })
+                                    .map(|t| t.id);
+
+                                if let Some(tid) = t_match {
+                                    tid
+                                } else {
+                                    let p_match = case_manager
+                                        .get_persons(case)
+                                        .ok()
+                                        .and_then(|persons| {
+                                            persons.into_iter().find(|p| {
+                                                let full_name = format!(
+                                                    "{} {}",
+                                                    p.first_name.as_deref().unwrap_or(""),
+                                                    p.last_name.as_deref().unwrap_or("")
+                                                )
+                                                .trim()
+                                                .to_string()
+                                                .to_lowercase();
+                                                let query = name.to_lowercase();
+                                                full_name == query
+                                                    || full_name.contains(&query)
+                                                    || query.contains(&full_name)
+                                                    || p.nicknames
+                                                        .iter()
+                                                        .any(|n| n.value.to_lowercase() == query)
+                                            })
+                                        })
+                                        .map(|p| p.id);
+
+                                    p_match.unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+                                }
+                            };
+
+                            let attr_json = call
+                                .arguments
+                                .get("attributes")
+                                .cloned()
+                                .unwrap_or_else(|| "{}".into());
+
+                            let mut data = HashMap::new();
+                            if let Ok(parsed) =
+                                serde_json::from_str::<HashMap<String, String>>(&attr_json)
+                            {
+                                data = parsed;
                             }
-                        }
-                        "get_targets" => {
-                            if let Some(case) = &case_name {
-                                match case_manager.get_targets(case) {
-                                    Ok(targets) => {
-                                        let mut r = String::from("🗂️ Objetivos:\n");
-                                        for t in targets {
-                                            r.push_str(&format!("- {}: {:?}\n", t.name, t.data));
+
+                            // Sincronización proactiva con la tabla de Personas
+                            if category == "Person" {
+                                if let Ok(persons) = case_manager.get_persons(case) {
+                                    if let Some(mut person) =
+                                        persons.into_iter().find(|p| p.id == id)
+                                    {
+                                        let mut changed = false;
+                                        if let Some(email) = data.get("Email").or(data.get("email"))
+                                        {
+                                            person.email = Some(email.clone());
+                                            changed = true;
                                         }
-                                        r
-                                    }
-                                    Err(e) => e,
-                                }
-                            } else {
-                                "No hay caso activo".to_string()
-                            }
-                        }
-                        "link_targets" => {
-                            if let (Some(s), Some(dst), Some(r)) = (
-                                args.get("source_id"),
-                                args.get("target_id"),
-                                args.get("relation"),
-                            ) {
-                                if let Some(case) = &case_name {
-                                    match case_manager.add_link(case, s, dst, r) {
-                                        Ok(_) => format!("✅ Vínculo: {} -> {}", s, dst),
-                                        Err(e) => e,
-                                    }
-                                } else {
-                                    "No hay caso activo".to_string()
-                                }
-                            } else {
-                                "Faltan argumentos (source_id, target_id, relation)".to_string()
-                            }
-                        }
-                        "generate_dorks" => {
-                            tools::generate_dorks(
-                                args.get("target").unwrap_or(&"".into()).to_string(),
-                            )
-                            .await
-                            .data
-                        }
-                        "social_search" => {
-                            tools::social_search(
-                                args.get("target").unwrap_or(&"".into()).to_string(),
-                                &*config_lock.lock().await,
-                            )
-                            .await
-                            .data
-                        }
-                        "search_leaks" => {
-                            tools::search_leaks(
-                                args.get("target").unwrap_or(&"".into()).to_string(),
-                                &*config_lock.lock().await,
-                            )
-                            .await
-                            .data
-                        }
-                        _ => "Herramienta no encontrada".to_string(),
-                    };
+                                        if let Some(phone) = data
+                                            .get("Phone")
+                                            .or(data.get("phone"))
+                                            .or(data.get("Tel"))
+                                        {
+                                            person.phone = Some(phone.clone());
+                                            changed = true;
+                                        }
+                                        if let Some(dni) =
+                                            data.get("DNI").or(data.get("dni")).or(data.get("ID"))
+                                        {
+                                            person.dni = Some(dni.clone());
+                                            changed = true;
+                                        }
 
-                    tool_outputs.push_str(&format!("\nResultado de {}: {}\n", name, tool_result));
-                    agent.add_function_response(name, &tool_result);
-                    let _ = app.emit(
-                        "agent-tool-result",
-                        json!({"tool": name, "result": tool_result}),
-                    );
+                                        if changed {
+                                            let _ = case_manager.update_person_basic(case, person);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Construir objeto Target
+                            let t_type = match t_type_str.as_str() {
+                                "Domain" => TargetType::Domain,
+                                "IP" => TargetType::IP,
+                                "Email" => TargetType::Email,
+                                "Username" => TargetType::Username,
+                                "Phone" => TargetType::Phone,
+                                "File" => TargetType::File,
+                                "Hash" => TargetType::Hash,
+                                _ => TargetType::Other,
+                            };
+
+                            let target = Target {
+                                id,
+                                name: name.clone(),
+                                target_type: t_type,
+                                category: category.clone(),
+                                data,
+                                linked_targets: vec![],
+                                created_at: chrono::Utc::now(),
+                            };
+
+                            match case_manager.upsert_target_with_cat(case, target, &category) {
+                                Ok(_) => {
+                                    let _ = case_manager.log_event(
+                                        case,
+                                        "SUCCESS",
+                                        &format!("Objetivo '{}' actualizado.", name),
+                                        Some("upsert_intelligence"),
+                                    );
+                                    tool_results.push(format!(r#"{{"status": "OK", "message": "Objetivo '{}' actualizado correctamente."}}"#, name));
+                                }
+                                Err(e) => tool_results
+                                    .push(format!(r#"{{"status": "ERROR", "message": "{}"}}"#, e)),
+                            }
+                        } else {
+                            tool_results.push(
+                                r#"{"status": "ERROR", "message": "No hay un caso activo."}"#
+                                    .into(),
+                            );
+                        }
+                    } else {
+                        tool_results.push(format!(
+                            r#"{{"status": "ERROR", "message": "Herramienta '{}' no soportada."}}"#,
+                            call.tool_name
+                        ));
+                    }
                 }
+
+                // Inyectar resultados y seguir pensando
+                let combined_results = tool_results.join("\n");
+                agent.add_function_response("agent_tools", &combined_results);
             }
             AgentResponse::Error(e) => {
                 return Ok(OsintResult {
                     success: false,
-                    data: e.clone(),
+                    data: "".into(),
                     error: Some(e),
                 })
             }
         }
+    }
+
+    Ok(OsintResult {
+        success: false,
+        data: "El agente excedió el límite de razonamiento.".into(),
+        error: Some("Timeout Iterativo".into()),
+    })
+}
+
+// --- SECRETS COMMANDS ---
+
+#[tauri::command]
+pub async fn save_secure_secret(service: String, value: String) -> Result<OsintResult, String> {
+    match secrets::set_secret(&service, &value) {
+        Ok(_) => Ok(OsintResult {
+            success: true,
+            data: format!("Secreto para {} guardado en Keyring.", service),
+            error: None,
+        }),
+        Err(e) => Ok(OsintResult {
+            success: false,
+            data: "".into(),
+            error: Some(e),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn get_secure_secret(service: String) -> Result<OsintResult, String> {
+    match secrets::get_secret(&service) {
+        Ok(val) => Ok(OsintResult {
+            success: true,
+            data: val,
+            error: None,
+        }),
+        Err(e) => Ok(OsintResult {
+            success: false,
+            data: "".into(),
+            error: Some(e),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn delete_secure_secret(service: String) -> Result<OsintResult, String> {
+    match secrets::delete_secret(&service) {
+        Ok(_) => Ok(OsintResult {
+            success: true,
+            data: format!("Secreto para {} eliminado.", service),
+            error: None,
+        }),
+        Err(e) => Ok(OsintResult {
+            success: false,
+            data: "".into(),
+            error: Some(e),
+        }),
     }
 }
 
@@ -816,6 +929,43 @@ pub fn create_target_cmd(
         Ok(_) => Ok(OsintResult {
             success: true,
             data: "Objetivo técnico creado/actualizado.".to_string(),
+            error: None,
+        }),
+        Err(e) => Ok(OsintResult {
+            success: false,
+            data: "".to_string(),
+            error: Some(e),
+        }),
+    }
+}
+#[tauri::command]
+pub fn delete_target_cmd(
+    case_manager: State<'_, CaseManager>,
+    case_name: String,
+    target_id: String,
+) -> Result<OsintResult, String> {
+    match case_manager.delete_target(&case_name, &target_id) {
+        Ok(_) => Ok(OsintResult {
+            success: true,
+            data: "Objetivo técnico eliminado correctamente.".to_string(),
+            error: None,
+        }),
+        Err(e) => Ok(OsintResult {
+            success: false,
+            data: "".to_string(),
+            error: Some(e),
+        }),
+    }
+}
+#[tauri::command]
+pub fn get_activity_log_cmd(
+    case_manager: State<'_, CaseManager>,
+    case_name: String,
+) -> Result<OsintResult, String> {
+    match case_manager.get_activity_log(&case_name) {
+        Ok(logs) => Ok(OsintResult {
+            success: true,
+            data: serde_json::to_string(&logs).unwrap_or_default(),
             error: None,
         }),
         Err(e) => Ok(OsintResult {

@@ -17,30 +17,71 @@
         instagram_session: "",
         twitter_session: "",
         facebook_session: "",
+        wsl_sudo_password: "",
     });
 
     let showSavedMessage = $state(false);
 
-    onMount(() => {
-        // Load keys from localStorage
+    onMount(async () => {
+        // 1. Cargar configuración básica (toggles) desde localStorage
         const savedKeys = localStorage.getItem("osint_api_keys");
+        let localData = {};
         if (savedKeys) {
-            const parsed = JSON.parse(savedKeys);
-            // IMPORTANTE: Los servicios siempre inician apagados por seguridad
-             apiKeys = { 
+            localData = JSON.parse(savedKeys);
+            apiKeys = { 
                 ...apiKeys, 
-                ...parsed,
+                ...localData,
                 tor_active: false,
                 mac_masking_active: false,
                 proxy_url: ""
             };
-            // Sincronizar con Rust al cargar
-            syncWithRust();
         }
+
+        // 2. Intentar cargar secretos desde el Keyring (Seguro)
+        const services = [
+            'hunter_io', 'shodan', 'virustotal', 'ipapi', 'hibp_api_key',
+            'linkedin_session', 'instagram_session', 'twitter_session', 'facebook_session',
+            'wsl_sudo_password'
+        ];
+
+        for (const service of services) {
+            try {
+                // Si ya tenemos el valor en localData, es un candidato a migración
+                const localValue = localData[service];
+                
+                const res = await invoke("get_secure_secret", { service });
+                if (res.success && res.data) {
+                    apiKeys[service] = res.data;
+                    
+                    // Si el proceso llegó acá, y había algo en localStorage, lo borramos (Migración Exitosa)
+                    if (localValue) {
+                        console.log(`Migración: Secreto '${service}' ya estaba en Keyring, limpiando LocalStorage.`);
+                        delete localData[service];
+                    }
+                } else if (localValue) {
+                    // MIGRACIÓN ACTIVA: Está en local pero no en Keyring
+                    console.log(`Migración: Moviendo '${service}' al Keyring...`);
+                    const saveRes = await invoke("save_secure_secret", { service, value: localValue });
+                    if (saveRes.success) {
+                        delete localData[service];
+                        apiKeys[service] = localValue;
+                    }
+                }
+            } catch (e) {
+                console.error(`Error procesando secreto para ${service}:`, e);
+            }
+        }
+
+        // 3. Limpiar localStorage de secretos migrados
+        localStorage.setItem("osint_api_keys", JSON.stringify(localData));
+
+        // 4. Sincronizar con el estado global de Rust (OsintConfig)
+        syncWithRust();
     });
 
     async function syncWithRust() {
         try {
+            // Enviamos la config a Rust para que las herramientas tengan las keys
             await invoke("update_osint_config", {
                 config: $state.snapshot(apiKeys)
             });
@@ -50,8 +91,28 @@
     }
 
     async function saveKeys() {
-        localStorage.setItem("osint_api_keys", JSON.stringify($state.snapshot(apiKeys)));
+        // Guardar configuración no sensible en localStorage
+        const configToSave = { ...$state.snapshot(apiKeys) };
+        const services = [
+            'hunter_io', 'shodan', 'virustotal', 'ipapi', 'hibp_api_key',
+            'linkedin_session', 'instagram_session', 'twitter_session', 'facebook_session',
+            'wsl_sudo_password'
+        ];
+        
+        // Guardar secretos en Keyring y quitarlos del objeto de localStorage
+        for (const service of services) {
+            const value = configToSave[service];
+            if (value) {
+                await invoke("save_secure_secret", { service, value });
+            } else {
+                await invoke("delete_secure_secret", { service });
+            }
+            delete configToSave[service];
+        }
+
+        localStorage.setItem("osint_api_keys", JSON.stringify(configToSave));
         await syncWithRust();
+        
         showSavedMessage = true;
         setTimeout(() => {
             showSavedMessage = false;
@@ -63,15 +124,14 @@
         try {
             const res = await invoke("set_tor_active", { active });
             if (res.success) {
-                // Sincronizar proxy url localmente
                 if (active) {
                     apiKeys.proxy_url = "socks5h://127.0.0.1:9050";
                 } else {
                     apiKeys.proxy_url = "";
                 }
-                localStorage.setItem("osint_api_keys", JSON.stringify($state.snapshot(apiKeys)));
+                // Guardar config de red (No secreta)
+                saveKeys();
             } else {
-                // Revertir si falló
                 apiKeys.tor_active = !active;
             }
         } catch (e) {
@@ -85,7 +145,7 @@
         try {
             const res = await invoke("set_mac_masking", { active });
             if (res.success) {
-                localStorage.setItem("osint_api_keys", JSON.stringify($state.snapshot(apiKeys)));
+                saveKeys();
             } else {
                 apiKeys.mac_masking_active = !active;
                 alert("Error: " + res.error);
@@ -97,21 +157,26 @@
         }
     }
 
-    function clearKeys() {
+    async function clearKeys() {
         if (
             confirm(
-                "¿Estás seguro de que quieres borrar todas las claves y configuraciones?",
+                "¿Estás seguro de que quieres borrar todas las claves y configuraciones? Se eliminarán también del Almacén de Credenciales del Sistema.",
             )
         ) {
-            apiKeys.hunter_io = "";
-            apiKeys.shodan = "";
-            apiKeys.virustotal = "";
-            apiKeys.ipapi = "";
-            apiKeys.hibp_api_key = "";
-            apiKeys.proxy_url = "";
+            const services = [
+                'hunter_io', 'shodan', 'virustotal', 'ipapi', 'hibp_api_key',
+                'linkedin_session', 'instagram_session', 'twitter_session', 'facebook_session',
+                'wsl_sudo_password'
+            ];
+
+            for (const service of services) {
+                await invoke("delete_secure_secret", { service });
+                apiKeys[service] = "";
+            }
+
             apiKeys.tor_active = false;
             apiKeys.mac_masking_active = false;
-            apiKeys.original_mac = "";
+            apiKeys.proxy_url = "";
             
             localStorage.removeItem("osint_api_keys");
             syncWithRust();
@@ -172,10 +237,6 @@
                             <span class="settings__mac-label">MAC Física Real:</span>
                             <span class="settings__mac-value">{apiKeys.original_mac}</span>
                         </div>
-                        <div class="settings__mac-item">
-                            <span class="settings__mac-label">Estado:</span>
-                            <span class="settings__mac-value settings__mac-value--masked">Enmascarada (Oculta)</span>
-                        </div>
                     </div>
                 {/if}
             {/if}
@@ -195,6 +256,26 @@
                     >Obtener Clave ↗</a
                 ></small
             >
+        </div>
+    </div>
+
+    <div class="settings__card">
+        <h3 class="settings__card-title">Configuración Avanzada (Linux / WSL)</h3>
+        <p class="settings__card-description text-muted">
+            Permite al bot ejecutar herramientas nativas con privilegios de superusuario de forma automatizada.
+        </p>
+        <div class="settings__form-group">
+            <label class="settings__label" for="wsl_sudo">WSL Sudo Password</label>
+            <input
+                id="wsl_sudo"
+                class="settings__input"
+                type="password"
+                placeholder="Contraseña de tu usuario en Kali/WSL"
+                bind:value={apiKeys.wsl_sudo_password}
+            />
+            <small class="settings__small text-accent">
+                Se guarda de forma segura en el Almacén de Credenciales de Windows (Keyring).
+            </small>
         </div>
     </div>
 

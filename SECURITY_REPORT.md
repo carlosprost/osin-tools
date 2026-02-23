@@ -1,8 +1,8 @@
-# SECURITY_REPORT.md - OSINT Tools Dashboard
+# SECURITY_REPORT.md - SODIIC
 
-Este documento detalla la postura de seguridad, el stack tecnológico y las medidas preventivas implementadas en el proyecto para garantizar la integridad y confidencialidad de las investigaciones.
+Este documento detalla la postura de seguridad y el cumplimiento normativo de **SODIIC** (Sistema de Organización de Investigaciones e Inteligencia Criminal).
 
-## 1. Auditoría de Stack y Dependencias
+## 1. Auditoría de Stack y Dependencias implementadas en el proyecto para garantizar la integridad y confidencialidad de las investigaciones.
 
 | Tecnología            | Rol          | Contribución a la Seguridad                                          |
 | :-------------------- | :----------- | :------------------------------------------------------------------- |
@@ -36,7 +36,7 @@ Este documento detalla la postura de seguridad, el stack tecnológico y las medi
 | **A01:2021** | Broken Access Control | Implementación de RBAC básico y aislamiento de directorios por investigación.        |
 | **A03:2021** | Injection             | Parametrización total en SQLite y validación de tipos en Serde.                      |
 | **A04:2021** | Insecure Design       | Fallback seguro en procesos Sidecar (Tor) y manejo de errores genéricos hacia la UI. |
-| **A07:2021** | Identification & Auth | Uso de variables de entorno `.env` para llaves de API externas (HIBP, VirusTotal).   |
+| **A07:2021** | Identification & Auth | Uso del Keyring del Sistema (Windows Credential Manager) para API keys y tokens.     |
 
 ---
 

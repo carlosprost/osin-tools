@@ -1,5 +1,5 @@
 [package]
-name = "osint-dashboard"
+name = "sodiic"
 version = "0.0.0"
 description = "A OSINT Dashboard"
 authors = ["you"]
@@ -28,3 +28,4 @@ headless_chrome = "1"
 rand = "0.8"
 rusqlite = { version = "0.38.0", features = ["bundled"] }
 uuid = { version = "1.21.0", features = ["v4", "serde"] }
+keyring = "3.6.3"
