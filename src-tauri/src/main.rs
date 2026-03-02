@@ -6,9 +6,14 @@ use tokio::sync::Mutex;
 mod agent;
 mod cases;
 mod commands;
+mod loop_detector;
 mod mac_spoof;
+mod memory;
 mod models;
+mod scraper;
 mod secrets;
+mod skills;
+mod telegram;
 mod tools;
 mod tor_manager;
 
@@ -25,6 +30,8 @@ fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(agent))
         .manage(AgentAbort(abort_flag))
+        .manage(telegram::TelegramState::default())
+        .manage(memory::SemanticMemoryManager::new())
         .manage(Mutex::new(models::OsintConfig::default()))
         .manage(tor_state)
         .setup(|app| {
@@ -38,7 +45,6 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
-            commands::greet,
             commands::run_osint_lookup,
             commands::ask_agent,
             commands::extract_metadata,
@@ -54,6 +60,7 @@ fn main() {
             commands::list_cases,
             commands::delete_case_cmd,
             commands::load_case,
+            commands::open_case_folder,
             commands::save_case_history,
             commands::get_case_history,
             // Personas CRUD
@@ -77,7 +84,15 @@ fn main() {
             // Secrets
             commands::save_secure_secret,
             commands::get_secure_secret,
-            commands::delete_secure_secret
+            commands::delete_secure_secret,
+            commands::run_manual_wsl,
+            // Telegram Bot
+            commands::start_telegram_cmd,
+            commands::stop_telegram_cmd,
+            // Semantic Memory
+            commands::add_memory_cmd,
+            commands::search_memory_cmd,
+            commands::get_ollama_models
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::Destroyed = event {

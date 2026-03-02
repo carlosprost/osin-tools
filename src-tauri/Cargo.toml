@@ -29,3 +29,4 @@ rand = "0.8"
 rusqlite = { version = "0.38.0", features = ["bundled"] }
 uuid = { version = "1.21.0", features = ["v4", "serde"] }
 keyring = "3.6.3"
+sha2 = "0.10"

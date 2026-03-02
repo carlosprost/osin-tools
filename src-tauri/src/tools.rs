@@ -436,11 +436,14 @@ pub async fn browse_url(url: String, config: &OsintConfig) -> OsintResult {
         let mut cookies_to_set = Vec::new();
         let url_lower = url.to_lowercase();
 
-        if url_lower.contains("linkedin.com") && !config.linkedin_session.is_empty() {
+        // Mapeo detallado de cookies por plataforma
+        if (url_lower.contains("linkedin.com") || url_lower.contains("lnkd.in"))
+            && !config.linkedin_session.is_empty()
+        {
             cookies_to_set.push(CookieParam {
                 name: "li_at".into(),
                 value: config.linkedin_session.clone().into(),
-                domain: Some(".www.linkedin.com".into()),
+                domain: Some(".linkedin.com".into()), // Dominio genérico para capturar subdominios
                 path: Some("/".into()),
                 secure: Some(true),
                 http_only: Some(true),
@@ -453,7 +456,9 @@ pub async fn browse_url(url: String, config: &OsintConfig) -> OsintResult {
                 partition_key: None,
                 url: None,
             });
-        } else if (url_lower.contains("instagram.com") || url_lower.contains("instagr.am"))
+        }
+
+        if (url_lower.contains("instagram.com") || url_lower.contains("instagr.am"))
             && !config.instagram_session.is_empty()
         {
             cookies_to_set.push(CookieParam {
@@ -472,7 +477,9 @@ pub async fn browse_url(url: String, config: &OsintConfig) -> OsintResult {
                 partition_key: None,
                 url: None,
             });
-        } else if (url_lower.contains("twitter.com") || url_lower.contains("x.com"))
+        }
+
+        if (url_lower.contains("twitter.com") || url_lower.contains("x.com"))
             && !config.twitter_session.is_empty()
         {
             cookies_to_set.push(CookieParam {
@@ -493,13 +500,55 @@ pub async fn browse_url(url: String, config: &OsintConfig) -> OsintResult {
             });
         }
 
-        if !cookies_to_set.is_empty() {
-            if let Err(e) = tab.set_cookies(cookies_to_set) {
-                eprintln!("Advertencia: Falló inyección de cookies: {}", e);
-            } else {
-                // Recargar para que las cookies surtan efecto en la sesión
-                let _ = tab.navigate_to(&url);
+        if (url_lower.contains("facebook.com") || url_lower.contains("fb.com"))
+            && (!config.fb_c_user.is_empty() || !config.fb_xs.is_empty())
+        {
+            if !config.fb_c_user.is_empty() {
+                cookies_to_set.push(CookieParam {
+                    name: "c_user".into(),
+                    value: config.fb_c_user.clone().into(),
+                    domain: Some(".facebook.com".into()),
+                    path: Some("/".into()),
+                    secure: Some(true),
+                    http_only: Some(false),
+                    same_site: None,
+                    expires: None,
+                    priority: None,
+                    same_party: None,
+                    source_scheme: None,
+                    source_port: None,
+                    partition_key: None,
+                    url: None,
+                });
             }
+            if !config.fb_xs.is_empty() {
+                cookies_to_set.push(CookieParam {
+                    name: "xs".into(),
+                    value: config.fb_xs.clone().into(),
+                    domain: Some(".facebook.com".into()),
+                    path: Some("/".into()),
+                    secure: Some(true),
+                    http_only: Some(true),
+                    same_site: None,
+                    expires: None,
+                    priority: None,
+                    same_party: None,
+                    source_scheme: None,
+                    source_port: None,
+                    partition_key: None,
+                    url: None,
+                });
+            }
+        }
+
+        if !cookies_to_set.is_empty() {
+            // Seteamos las cookies y forzamos una navegación limpia para asegurar el estado de la sesión
+            if let Err(e) = tab.set_cookies(cookies_to_set) {
+                eprintln!("Advertencia: Falló inyección de cookies decorativa: {}", e);
+            }
+            // Recargar para que las cookies surtan efecto en la sesión antes de procesar el contenido
+            let _ = tab.navigate_to(&url);
+            std::thread::sleep(Duration::from_secs(3)); // Esperar a que la sesión se valide
         }
         // --------------------------------------------------
 
@@ -549,6 +598,71 @@ pub async fn browse_url(url: String, config: &OsintConfig) -> OsintResult {
                 error: Some("El motor de navegación experimentó un error crítico interno.".into()),
             }
         }
+    }
+}
+
+pub async fn scrape_generic(url: String) -> OsintResult {
+    let result = spawn_blocking(move || crate::scraper::scrape_url_stealth(&url)).await;
+
+    match result {
+        Ok(Ok(text)) => OsintResult {
+            success: true,
+            data: if text.len() > 10000 {
+                format!(
+                    "{}...\n\n[Contenido truncado, exceso de texto]",
+                    &text[..10000]
+                )
+            } else {
+                text
+            },
+            error: None,
+        },
+        Ok(Err(e)) => OsintResult {
+            success: false,
+            data: "".into(),
+            error: Some(format!("Fallo en Scraping Stealth: {}", e)),
+        },
+        Err(e) => OsintResult {
+            success: false,
+            data: "".into(),
+            error: Some(format!(
+                "El orquestador de Chromium falló de forma crítica: {}",
+                e
+            )),
+        },
+    }
+}
+
+pub async fn scrape_social(url: String) -> OsintResult {
+    // Aquí a futuro se pueden pasar parémetros para emular comportamiento de scroll, pero usamos la misma base
+    let result = spawn_blocking(move || crate::scraper::scrape_url_stealth(&url)).await;
+
+    match result {
+        Ok(Ok(text)) => OsintResult {
+            success: true,
+            data: if text.len() > 10000 {
+                format!(
+                    "{}...\n\n[Contenido truncado, exceso de texto]",
+                    &text[..10000]
+                )
+            } else {
+                text
+            },
+            error: None,
+        },
+        Ok(Err(e)) => OsintResult {
+            success: false,
+            data: "".into(),
+            error: Some(format!(
+                "El firewall de la red social rechazó la conexión o el script falló: {}",
+                e
+            )),
+        },
+        Err(e) => OsintResult {
+            success: false,
+            data: "".into(),
+            error: Some(format!("Error crítico lanzando Stealth Chromium: {}", e)),
+        },
     }
 }
 
@@ -942,4 +1056,142 @@ pub async fn run_wsl_command(command: String, sudo_pass: Option<String>) -> Osin
             }
         }
     }
+}
+
+/// Procesa la salida de herramientas técnicas y devuelve un JSON estructurado
+/// con los datos anidados bajo el nombre de la herramienta que los generó.
+/// Ejemplo: `{"whois": {"domain": "...", "registrant": "..."}}`
+pub fn clean_technical_noise(text: &str, tool_name: &str) -> String {
+    let mut data_map = std::collections::HashMap::<String, serde_json::Value>::new();
+
+    // --- Parser específico para PING ---
+    // Detecta el output de ping por sus marcadores característicos
+    if text.contains("icmp_seq") || text.contains("bytes from") {
+        let mut inner_map = std::collections::HashMap::<String, serde_json::Value>::new();
+        let mut paquetes: Vec<serde_json::Value> = Vec::new();
+        let mut host = String::new();
+
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if trimmed.contains("bytes from") && trimmed.contains("icmp_seq") {
+                // Extraer IP host de la primera línea de paquete
+                if host.is_empty() {
+                    if let Some(from_part) = trimmed.split("bytes from ").nth(1) {
+                        host = from_part.split(':').next().unwrap_or("").trim().to_string();
+                    }
+                }
+                // Parsear tokens clave=valor del paquete
+                let mut paquete = std::collections::HashMap::<String, String>::new();
+                for token in trimmed.split_whitespace() {
+                    if let Some((k, v)) = token.split_once('=') {
+                        // Para "time=20.2" agregar la unidad (siguiente token "ms")
+                        paquete.insert(k.to_string(), v.to_string());
+                    }
+                }
+                // Reconstruir time con unidad: buscar "time=X ms" en la línea original
+                if let Some(time_idx) = trimmed.find("time=") {
+                    let time_str = &trimmed[time_idx + 5..];
+                    let time_val: String = time_str
+                        .splitn(3, ' ')
+                        .take(2)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    paquete.insert("time".to_string(), time_val);
+                }
+                if !paquete.is_empty() {
+                    paquetes
+                        .push(serde_json::to_value(&paquete).unwrap_or(serde_json::Value::Null));
+                }
+            } else if trimmed.contains("packets transmitted")
+                || trimmed.contains("paquetes transmitidos")
+            {
+                inner_map.insert(
+                    "estadísticas".to_string(),
+                    serde_json::Value::String(trimmed.to_string()),
+                );
+            } else if trimmed.starts_with("rtt ") {
+                inner_map.insert(
+                    "rtt".to_string(),
+                    serde_json::Value::String(trimmed.to_string()),
+                );
+            }
+        }
+
+        if !host.is_empty() {
+            inner_map.insert("host".to_string(), serde_json::Value::String(host));
+        }
+        if !paquetes.is_empty() {
+            inner_map.insert("paquetes".to_string(), serde_json::Value::Array(paquetes));
+        }
+
+        data_map.insert(
+            tool_name.to_string(),
+            serde_json::to_value(&inner_map).unwrap_or(serde_json::Value::Null),
+        );
+        let wrapper = serde_json::json!({ "detalles_tecnicos": data_map });
+        return serde_json::to_string(&wrapper).unwrap_or_else(|_| "{}".to_string());
+    }
+    // ----------------------------------------------------------
+    let noise_keywords = [
+        "información a la que estás accediendo",
+        "fines relacionados con operaciones",
+        "absolutamente prohibido su uso",
+        "DIRECCIÓN NACIONAL DEL REGISTRO",
+        "depositaria de la información",
+        "Solo con la finalidad de",
+        "amparada por la Ley N° 25326",
+        "Decreto Reglamentario",
+        "TERMS OF USE",
+        "NOTICE:",
+        "BY ACCESSING THIS DATA",
+        "The data in this WHOIS database",
+        "Para más información",
+    ];
+
+    let mut inner_map = std::collections::HashMap::<String, String>::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('%') || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let line_lower = trimmed.to_lowercase();
+        let is_noise = noise_keywords
+            .iter()
+            .any(|k| line_lower.contains(&k.to_lowercase()));
+
+        if !is_noise && trimmed.contains(':') {
+            let mut parts = trimmed.splitn(2, ':');
+            if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+                let k = key.trim().replace('\t', " ").to_lowercase();
+                let v = value.trim().replace('\t', " ");
+
+                if !k.is_empty() && !v.is_empty() {
+                    // Si la llave ya existe (ej: nserver), agregamos al valor existente
+                    inner_map
+                        .entry(k)
+                        .and_modify(|existing: &mut String| {
+                            if !existing.contains(&v) {
+                                existing.push_str(", ");
+                                existing.push_str(&v);
+                            }
+                        })
+                        .or_insert(v);
+                }
+            }
+        }
+    }
+
+    // Anidar bajo el nombre de la herramienta: {"whois": {...}, "ping": {...}}
+    // Envolver en "detalles_tecnicos" para que quede claro en los atributos guardados
+    let inner_value = serde_json::to_value(&inner_map).unwrap_or(serde_json::Value::Null);
+    data_map.insert(tool_name.to_string(), inner_value);
+
+    let wrapper = serde_json::json!({ "detalles_tecnicos": data_map });
+    serde_json::to_string(&wrapper).unwrap_or_else(|_| "{}".to_string())
 }

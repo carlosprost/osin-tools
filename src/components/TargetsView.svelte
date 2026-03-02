@@ -12,6 +12,8 @@
   // Detail Modal State
   let showDetailModal = $state(false);
   let viewingPerson = $state(null);
+  let viewingTechTarget = $state(null);
+  let showTechDetailModal = $state(false);
 
   // Modal Person State
   let showPersonModal = $state(false);
@@ -293,10 +295,16 @@
       showDetailModal = true;
   }
 
+  function openTechDetailModal(t) {
+      viewingTechTarget = t;
+      showTechDetailModal = true;
+  }
+
   function closeModal() {
     showPersonModal = false;
     showTechModal = false;
-    showDetailModal = false; // Also close detail modal
+    showDetailModal = false; 
+    showTechDetailModal = false;
   }
 
   $effect(() => {
@@ -304,7 +312,7 @@
   });
 </script>
 
-<svelte:body class:printing={showDetailModal} />
+<svelte:body class:printing={showDetailModal || showTechDetailModal} />
 
 <div class="targets-view">
   <div class="view-header">
@@ -371,20 +379,26 @@
                 </thead>
                 <tbody>
                     {#each technicalTargets as t}
-                        <tr>
+                        <!-- svelte-ignore a11y_click_events_have_key_events -->
+                        <tr class="clickable-row" role="button" tabindex="0" onclick={() => openTechDetailModal(t)}>
                             <td><span class="type-badge">{t.target_type}</span></td>
                             <td>
                                 <div><strong>{t.name}</strong></div>
                                 <div class="target-data-preview">
-                                    {#each Object.entries(t.data) as [key, value]}
-                                        <small class="data-tag"><b>{key}:</b> {value}</small>
+                                    {#if t.data?.detalles_tecnicos}
+                                        {#each Object.keys(t.data.detalles_tecnicos) as herramienta}
+                                            <small class="data-tag tool-badge">🔍 {herramienta.toUpperCase()}</small>
+                                        {/each}
+                                    {/if}
+                                    {#each Object.entries(t.data || {}).filter(([k]) => k !== 'detalles_tecnicos') as [key, value]}
+                                        <small class="data-tag"><b>{key}:</b> {typeof value === 'object' ? '...' : value}</small>
                                     {/each}
                                 </div>
                             </td>
                             <td>{new Date(t.created_at).toLocaleDateString()}</td>
                             <td class="table-actions">
-                                <button class="btn-icon" onclick={() => openEditTechModal(t)}>✏️</button>
-                                <button class="btn-icon delete" onclick={() => handleDeleteTechTarget(t.id)}>🗑️</button>
+                                <button class="btn-icon" onclick={(e) => { e.stopPropagation(); openEditTechModal(t); }}>✏️</button>
+                                <button class="btn-icon delete" onclick={(e) => { e.stopPropagation(); handleDeleteTechTarget(t.id); }}>🗑️</button>
                             </td>
                         </tr>
                     {/each}
@@ -481,6 +495,124 @@
                             </ul>
                         {:else}
                             <p class="empty-text">No hay perfiles sociales registrados.</p>
+                        {/if}
+                    </div>
+                </div>
+
+                <div class="ficha-footer">
+                    Generado por OSINT Dashboard - {new Date().toLocaleString()}
+                </div>
+            </div>
+        </div>
+    </div>
+  {/if}
+
+  <!-- TECHNICAL TARGET DETAIL MODAL -->
+  {#if showTechDetailModal && viewingTechTarget}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="modal-backdrop detail-backdrop" role="button" tabindex="-1" onclick={() => showTechDetailModal = false}>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div class="modal detail-modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+            <div class="detail-header-actions no-print">
+                <button class="btn-secondary" onclick={() => window.print()}>🖨️ Imprimir / Guardar PDF</button>
+                <button class="btn-icon" onclick={() => showTechDetailModal = false}>❌</button>
+            </div>
+            
+            <div class="ficha-content">
+                <div class="ficha-header">
+                    <div class="ficha-title">INFORME TÉCNICO DE OBJETIVO</div>
+                    <div class="ficha-meta">
+                        <span>ID: {viewingTechTarget.id.split('-')[0]}...</span>
+                        <span>Caso: {agentStore.activeCase?.name || "N/A"}</span>
+                    </div>
+                </div>
+
+                <div class="ficha-body">
+                    <div class="section tech-identity">
+                        <h4>INFORMACIÓN GENERAL</h4>
+                        <div class="data-grid">
+                            <div class="data-item"><strong>Identificador:</strong> {viewingTechTarget.name}</div>
+                            <div class="data-item"><strong>Tipo de Objetivo:</strong> {viewingTechTarget.target_type}</div>
+                            <div class="data-item"><strong>Fecha de Registro:</strong> {new Date(viewingTechTarget.created_at).toLocaleString()}</div>
+                        </div>
+                    </div>
+
+                    <div class="section tech-data">
+                        <h4>DATOS Y HALLAZGOS TÉCNICOS</h4>
+                        {#if viewingTechTarget.data?.detalles_tecnicos}
+                            <!-- Estructura consolidada: una sección por herramienta (whois, ping, etc) -->
+                            {#each Object.entries(viewingTechTarget.data.detalles_tecnicos) as [herramienta, campos]}
+                                <div class="tool-section">
+                                    <div class="tool-section-header">🔍 {herramienta.toUpperCase()}</div>
+                                    <div class="hallazgos-grid">
+                                        {#if typeof campos === 'object' && campos !== null}
+                                            {#each Object.entries(campos) as [key, value]}
+                                                {#if key === 'paquetes' && Array.isArray(value)}
+                                                    <!-- Renderizado especial para paquetes de ping -->
+                                                    <div class="hallazgo-item full-width no-border">
+                                                        <div class="hallazgo-key terminal-font">paquetes:</div>
+                                                        <div class="hallazgo-val">
+                                                            <table class="ping-table">
+                                                                <thead><tr><th>icmp_seq</th><th>ttl</th><th>time</th></tr></thead>
+                                                                <tbody>
+                                                                    {#each value as pkt}
+                                                                        <tr>
+                                                                            <td>{pkt.icmp_seq ?? '-'}</td>
+                                                                            <td>{pkt.ttl ?? '-'}</td>
+                                                                            <td>{pkt.time ?? '-'}</td>
+                                                                        </tr>
+                                                                    {/each}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    </div>
+                                                {:else if typeof value !== 'object'}
+                                                    <div class="hallazgo-item no-border">
+                                                        <div class="hallazgo-key terminal-font">{key}:</div>
+                                                        <div class="hallazgo-val terminal-font">
+                                                            {#if typeof value === 'string' && value.includes(',')}
+                                                                {#each value.split(',').map(s => s.trim()) as line}
+                                                                    <div class="val-line">{line}</div>
+                                                                {/each}
+                                                            {:else}
+                                                                {value}
+                                                            {/if}
+                                                        </div>
+                                                    </div>
+                                                {/if}
+                                            {/each}
+                                        {:else}
+                                            <div class="hallazgo-val terminal-font" style="padding: 10px;">{campos}</div>
+                                        {/if}
+                                    </div>
+                                </div>
+                            {/each}
+                        {:else if Object.keys(viewingTechTarget.data || {}).length > 0}
+                            <!-- Fallback para datos no técnicos o manuales que no están en detalles_tecnicos -->
+                            <div class="hallazgos-grid no-border">
+                                {#each Object.entries(viewingTechTarget.data) as [key, value]}
+                                    <div class="hallazgo-item no-border">
+                                        <div class="hallazgo-key terminal-font">{key}:</div>
+                                        <div class="hallazgo-val terminal-font">{value}</div>
+                                    </div>
+                                {/each}
+                            </div>
+                        {:else}
+                            <p class="empty-text">No hay hallazgos técnicos registrados para este objetivo.</p>
+                        {/if}
+                    </div>
+
+                    <div class="section tech-links">
+                        <h4>VÍNCULOS RELACIONADOS ({viewingTechTarget.linked_targets.length})</h4>
+                        {#if viewingTechTarget.linked_targets.length > 0}
+                            <ul class="clean-list">
+                                {#each viewingTechTarget.linked_targets as link}
+                                    <li>Vinculado con <strong>{link.target_id}</strong> (Relación: {link.relation})</li>
+                                {/each}
+                            </ul>
+                        {:else}
+                            <p class="empty-text">No se han establecido vínculos para este objetivo todavía.</p>
                         {/if}
                     </div>
                 </div>
@@ -693,10 +825,27 @@
   
   .table-container table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--border-color); }
+  .clickable-row { cursor: pointer; transition: background 0.2s; }
+  .clickable-row:hover { background: var(--bg-primary); }
   .table-actions { text-align: right; width: 100px; }
   .target-data-preview { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
   .data-tag { background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px; font-size: 0.75rem; border: 1px solid var(--border-color); }
   .type-badge { background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; }
+  .tool-badge { background: rgba(var(--accent-rgb, 99,102,241), 0.15); color: var(--accent-color); border-color: var(--accent-color); font-weight: 600; }
+
+  /* Secciones por herramienta en el modal de detalle técnico */
+  .tool-section { margin-bottom: 24px; border: 1px solid #ddd; border-radius: 6px; overflow: hidden; background: white; }
+  .tool-section-header { background: #f0f0f0; padding: 10px 15px; font-weight: 700; font-size: 0.8rem; letter-spacing: 0.08em; color: #111; border-bottom: 1px solid #ddd; display: flex; align-items: center; gap: 8px; }
+  .tool-section-header::before { content: ""; display: block; width: 3px; height: 14px; background: var(--accent-color, #333); border-radius: 2px; }
+  .hallazgo-item.full-width { grid-column: 1 / -1; }
+
+  /* Tabla de estadísticas de ping */
+  .ping-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin: 0; }
+  .ping-table th { background: #f9f9f9; padding: 6px 12px; color: #666; font-weight: 600; text-align: left; border-bottom: 1px solid #eee; border-right: 1px solid #eee; }
+  .ping-table th:last-child { border-right: none; }
+  .ping-table td { padding: 6px 12px; border-bottom: 1px solid #f5f5f5; font-family: 'Consolas', monospace; border-right: 1px solid #eee; }
+  .ping-table td:last-child { border-right: none; }
+  .ping-table tr:last-child td { border-bottom: none; }
 
   .tech-data-editor .data-edit-row { display: flex; gap: 5px; margin-bottom: 5px; align-items: center; }
   .form-group label { display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 5px; cursor: pointer; }
@@ -752,6 +901,41 @@
   
   .ficha-footer { margin-top: 40px; border-top: 1px solid #eee; padding-top: 10px; text-align: center; font-size: 0.8rem; color: #999; }
   .empty-text { font-style: italic; color: #888; margin: 5px 0; }
+
+  .hallazgos-grid { 
+    display: flex; 
+    flex-direction: column; 
+    gap: 2px;
+  }
+  .hallazgos-grid.no-border { border: none; }
+  .hallazgo-item { 
+    display: flex; 
+    align-items: flex-start;
+    padding: 2px 0;
+  }
+  .hallazgo-item.no-border { border: none; }
+  .hallazgo-key { 
+    font-weight: 500; 
+    width: 140px; 
+    color: var(--accent-color, #1a73e8); 
+    font-size: 0.85rem; 
+    padding: 2px 0;
+    flex-shrink: 0;
+  }
+  .hallazgo-val { 
+    flex: 1; 
+    word-break: break-all; 
+    padding: 2px 0;
+    font-size: 0.9rem;
+    color: #333;
+    line-height: 1.4;
+  }
+  .terminal-font {
+    font-family: 'Cascadia Code', 'Consolas', 'Monaco', 'Courier New', monospace !important;
+  }
+  .val-line { display: block; margin-bottom: 2px; }
+  .hallazgo-item:hover .hallazgo-key { background: transparent; color: var(--accent-color); }
+  .hallazgo-item:hover .hallazgo-val { background: rgba(0,0,0,0.02); }
 
   /* --- SISTEMA DE IMPRESIÓN (Estrategia de Visibilidad Inversa) --- */
   @media print {

@@ -1,10 +1,29 @@
 <script>
   import { agentStore } from "../lib/agentStore.svelte.js";
+  import { configStore } from "../lib/configStore.svelte.js";
+  import { invoke } from "@tauri-apps/api/core";
   import { fade } from "svelte/transition";
 
   // La barra ahora es persistente, pero el contenido cambia
   let isLoading = $derived(agentStore.isLoading);
   let statusText = $derived(agentStore.statusMessage);
+
+  async function handleOpenFolder() {
+    if (agentStore.activeCase) {
+      try {
+        await invoke("open_case_folder", { case_name: agentStore.activeCase.name });
+      } catch (e) {
+        console.error("Error al abrir carpeta:", e);
+      }
+    }
+  }
+
+  function handleKeydown(e) {
+    if (e.key === "Enter" || e.key === " ") {
+      if (e.key === " ") e.preventDefault();
+      handleOpenFolder();
+    }
+  }
 </script>
 
 <div class="status-bar" class:active={isLoading} transition:fade={{ duration: 200 }}>
@@ -35,16 +54,33 @@
         <span class="divider"></span>
         <span class="stat-item">
             <span class="label">Motor:</span>
-            <span class="value">Llama 3.2</span>
+            <select 
+              class="status-select" 
+              bind:value={configStore.config.ollama_model}
+              onchange={() => configStore.syncWithRust()}
+              title="Cambiar modelo de Ollama"
+            >
+              {#if configStore.availableModels.length === 0}
+                <option value={configStore.config.ollama_model}>{configStore.config.ollama_model}</option>
+              {/if}
+              {#each configStore.availableModels as model}
+                <option value={model}>{model}</option>
+              {/each}
+            </select>
         </span>
         <span class="divider"></span>
-        <span class="stat-item">
+        <button class="stat-item clickable-case" 
+                class:active={!!agentStore.activeCase} 
+                onclick={handleOpenFolder} 
+                onkeydown={handleKeydown} 
+                aria-label="Abrir carpeta del caso"
+                disabled={!agentStore.activeCase}>
             {#if agentStore.activeCase}
                 <span class="case-badge">📁 {agentStore.activeCase.name}</span>
             {:else}
                 <span class="no-case">No hay caso activo</span>
             {/if}
-        </span>
+        </button>
     </div>
   </div>
 </div>
@@ -150,6 +186,54 @@
     background: rgba(255, 255, 255, 0.05);
     padding: 2px 8px;
     border-radius: 4px;
+    color: var(--text-primary);
+  }
+
+  .clickable-case {
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+    display: flex;
+    align-items: center;
+  }
+
+  .clickable-case:not(:disabled):hover .case-badge {
+    background: rgba(255, 255, 255, 0.15);
+    color: var(--accent-color);
+  }
+
+  .clickable-case:disabled {
+    cursor: default;
+    opacity: 0.7;
+  }
+
+  .status-select {
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: inherit;
+    font-weight: 600;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    outline: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+  }
+
+  .status-select:hover {
+    color: var(--accent-color);
+  }
+
+  .status-select option {
+    background: #0f172a;
     color: var(--text-primary);
   }
 

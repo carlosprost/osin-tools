@@ -5,15 +5,44 @@
     import { invoke } from "@tauri-apps/api/core";
     import { open } from "@tauri-apps/plugin-dialog";
     import * as faceService from "../lib/face_recognition.js";
+    import snarkdown from "snarkdown";
+    import SuggestionsList from "./SuggestionsList.svelte";
 
     let input = $state("");
     let chatContainer = $state(null);
     let attachedImage = $state(null);
     let targetDescriptor = $state(null); // Biometric fingerprint
 
+    // --- Sugerencias (Slash & Mentions) ---
+    let showSuggestions = $state(false);
+    let suggestionType = $state('command'); // 'command' | 'mention' | 'model'
+    let filteredSuggestions = $state([]);
+    let suggestionIndex = $state(0);
+    let availableTargets = $state([]);
+    let availableModels = $state([]);
+
+    const commands = [
+        { id: 'manual', label: 'manual', description: 'Ver manual operativo' },
+        { id: 'modelo', label: 'modelo', description: 'Cambiar modelo de Ollama' },
+        { id: 'config', label: 'config', description: 'Ver configuración actual' },
+        { id: 'clear', label: 'clear', description: 'Limpiar chat' },
+        { id: 'info', label: 'info', description: 'Estado del sistema' }
+    ];
+
     $effect(() => {
-        if (agentStore.messages && chatContainer) {
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+        if ((agentStore.messages.length || agentStore.isLoading) && chatContainer) {
+            // Usamos requestAnimationFrame para asegurar que el DOM se haya renderizado
+            requestAnimationFrame(() => {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            });
+        }
+    });
+
+    // Cargar objetivos y modelos preventivamente para que el @ y / sean instantáneos
+    $effect(() => {
+        if (agentStore.activeCase) {
+            loadTargets();
+            loadModels();
         }
     });
 
@@ -73,13 +102,48 @@
 
     async function handleSend() {
         if (!input.trim() && !attachedImage) return;
-        const q = input;
+
+        let displayInput = input;
+        let internalQuery = input;
+
+        // Si es un comando tipo slash, lo procesamos pero mantenemos el texto literal para el usuario
+        if (input.startsWith('/')) {
+            const parts = input.trim().split(' ');
+            const cmd = parts[0].slice(1).toLowerCase();
+            const arg = parts.slice(1).join(' ');
+
+            if (cmd === 'clear') {
+                agentStore.messages = [];
+                input = "";
+                return;
+            }
+            
+            // Traducimos el comando a una orden clara para el Agente si es necesario,
+            // pero mantenemos el /comando en el chat del usuario.
+            if (cmd === 'manual') internalQuery = "Mostrame tu manual de operación detallado.";
+            else if (cmd === 'config') internalQuery = "Mostrame tu configuración actual y estado de APIs.";
+            else if (cmd === 'info') internalQuery = "Estado del sistema e identidad técnica.";
+            else if (cmd === 'modelo') {
+                if (arg) internalQuery = `Cambiá el modelo de Ollama a '${arg}'`;
+                else internalQuery = "Listame los modelos de Ollama disponibles.";
+            }
+        }
+
+        const q = internalQuery;
+        const disp = displayInput;
         const img = attachedImage;
+        
         input = "";
         attachedImage = null;
-        await agentStore.sendMessage(q, img);
 
-        // Scan last message for images to verify
+        // Agregamos el mensaje del usuario manualmente para que sea el literal
+        agentStore.messages.push({ role: "user", content: disp, image: img });
+        agentStore.saveHistory();
+        
+        // Llamamos al agente con la query interna pero sin que el store agregue otro mensaje de usuario
+        await agentStore.processQuery(q, img);
+
+        // Scan last message for images...
         const lastMsg = agentStore.messages[agentStore.messages.length - 1];
         if (lastMsg && lastMsg.role === "assistant" && targetDescriptor) {
             const regex = /!\[.*?\]\((.*?)\)/g;
@@ -89,6 +153,149 @@
             }
         }
     }
+
+    async function loadTargets() {
+        if (!agentStore.activeCase) return;
+        try {
+            const pRes = await invoke("get_persons_cmd", { caseName: agentStore.activeCase.name });
+            const tRes = await invoke("get_targets_json_cmd", { caseName: agentStore.activeCase.name });
+            
+            let targets = [];
+            if (pRes.success) {
+                const persons = JSON.parse(pRes.data);
+                targets.push(...persons.map(p => ({
+                    id: p.id,
+                    label: (p.first_name || p.last_name) ? `${p.first_name || ""} ${p.last_name || ""}`.trim() : (p.nicknames[0]?.value || "Sin Identificar"),
+                    type: 'Person',
+                    description: p.dni ? `DNI: ${p.dni}` : 'Persona'
+                })));
+            }
+            if (tRes.success) {
+                const tech = JSON.parse(tRes.data);
+                targets.push(...tech.map(t => ({
+                    id: t.id,
+                    label: t.name,
+                    type: t.target_type,
+                    description: t.target_type
+                })));
+            }
+            availableTargets = targets;
+        } catch (e) {
+            console.error("Error cargando objetivos:", e);
+        }
+    }
+
+    async function loadModels() {
+        try {
+            const res = await invoke("get_ollama_models");
+            if (res.success) {
+                availableModels = res.data.map(m => ({
+                    id: m.name,
+                    label: m.name,
+                    type: 'Model',
+                    description: `${(m.size / 1e9).toFixed(1)} GB`
+                }));
+            }
+        } catch (e) {
+            console.error("Error cargando modelos:", e);
+        }
+    }
+
+    async function handleInput(e) {
+        const val = e.target.value;
+        const cursor = e.target.selectionStart;
+        const textBefore = val.slice(0, cursor);
+        
+        // Manejo especial para sub-comandos como /modelo 
+        if (textBefore.startsWith('/modelo ') || textBefore === '/modelo ') {
+            const query = textBefore.slice(8).toLowerCase();
+            if (availableModels.length === 0) await loadModels();
+            filteredSuggestions = availableModels.filter(m => m.label.toLowerCase().includes(query));
+            suggestionType = 'model';
+            showSuggestions = true;
+            suggestionIndex = 0;
+            return;
+        }
+
+        const lastSlash = textBefore.lastIndexOf('/');
+        const lastAt = textBefore.lastIndexOf('@');
+        
+        if (lastSlash > lastAt && lastSlash !== -1 && (lastSlash === 0 || val[lastSlash-1] === ' ')) {
+            const query = textBefore.slice(lastSlash + 1).toLowerCase();
+            if (query.includes(' ')) { showSuggestions = false; return; }
+            filteredSuggestions = commands.filter(c => c.label.toLowerCase().includes(query));
+            suggestionType = 'command';
+            showSuggestions = true;
+            suggestionIndex = 0;
+        } else if (lastAt > lastSlash && lastAt !== -1 && (lastAt === 0 || val[lastAt-1] === ' ')) {
+            const query = textBefore.slice(lastAt + 1).toLowerCase();
+            if (query.includes(' ')) { showSuggestions = false; return; }
+            if (availableTargets.length === 0) loadTargets();
+            filteredSuggestions = availableTargets.filter(t => t.label.toLowerCase().includes(query));
+            suggestionType = 'mention';
+            showSuggestions = true;
+            suggestionIndex = 0;
+        } else {
+            showSuggestions = false;
+        }
+    }
+
+    async function handleSelectSuggestion(item) {
+        const val = input;
+        const cursor = chatInputRef.selectionStart;
+        const textBefore = val.slice(0, cursor);
+        const textAfter = val.slice(cursor);
+        
+        // Si el usuario selecciona 'modelo', transitamos a la selección de modelos
+        if (item.id === 'modelo' && suggestionType === 'command') {
+            input = "/modelo ";
+            showSuggestions = true;
+            if (availableModels.length === 0) await loadModels();
+            filteredSuggestions = availableModels;
+            suggestionType = 'model';
+            setTimeout(() => chatInputRef.focus(), 10);
+            return;
+        }
+
+        const symbol = suggestionType === 'mention' ? '@' : (suggestionType === 'model' ? '' : '/');
+        const lastSymbol = (suggestionType === 'mention' || suggestionType === 'command') 
+            ? textBefore.lastIndexOf(symbol)
+            : textBefore.lastIndexOf(' '); 
+        
+        if (suggestionType === 'model') {
+            input = "/modelo " + item.label + " ";
+        } else {
+            const newTextBefore = textBefore.slice(0, lastSymbol) + symbol + item.label + " ";
+            input = newTextBefore + textAfter;
+        }
+        
+        showSuggestions = false;
+        setTimeout(() => chatInputRef.focus(), 20);
+    }
+
+    function handleKeyDown(e) {
+        if (showSuggestions) {
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                suggestionIndex = (suggestionIndex + 1) % filteredSuggestions.length;
+            } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                suggestionIndex = (suggestionIndex - 1 + filteredSuggestions.length) % filteredSuggestions.length;
+            } else if (e.key === "Enter" || e.key === "Tab") {
+                if (filteredSuggestions[suggestionIndex]) {
+                    e.preventDefault();
+                    handleSelectSuggestion(filteredSuggestions[suggestionIndex]);
+                }
+            } else if (e.key === "Escape") {
+                showSuggestions = false;
+            }
+        } else if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+        }
+    }
+
+    let chatInputRef = $state(null);
 </script>
 
 {#if agentStore.isPanelOpen}
@@ -110,34 +317,34 @@
 
         <div class="agent-panel__chat-viewport" bind:this={chatContainer}>
             {#each agentStore.messages as msg}
-                <div class="agent-panel__message agent-panel__message--{msg.role}">
-                    <div class="agent-panel__bubble">
-                        {#if msg.role === "assistant"}
-                            <div class="agent-panel__markdown-body">
-                                {@html msg.content
-                                    .replace(/\{"name":\s*".*?",\s*"parameters":\s*\{.*?\}\}/g, "") 
-                                    .replace(/\n\s*\n/g, "\n") 
-                                    .replace(/\n/g, "<br>")
-                                    .replace(/\*\*(.*?)\*\*/g, "<b>$1</b>")}
-                            </div>
-                        {:else if msg.role === "user"}
-                            <div class="agent-panel__user-content">
-                                {#if msg.image}
-                                    <div class="agent-panel__attached-hint">📎 {msg.image.split(/[\\/]/).pop()}</div>
+                {#if msg.role !== "system"}
+                    {@const cleanContent = msg.role === "assistant" 
+                        ? msg.content
+                            .replace(/\{"name":\s*".*?",\s*"parameters":\s*\{[\s\\S]*?\}\}/g, "") 
+                            .replace(/\[TOOL_CALLS\][\s\\S]*?$/g, "")
+                            .replace(/Llamando a [a-zA-Z_]+\(.*?\)/g, "")
+                            .trim()
+                        : msg.content.trim()}
+
+                    {#if cleanContent || (msg.role === "user" && msg.image)}
+                        <div class="agent-panel__message agent-panel__message--{msg.role}">
+                            <div class="agent-panel__bubble">
+                                {#if msg.role === "assistant"}
+                                    <div class="agent-panel__markdown-body">
+                                        {@html snarkdown(cleanContent)}
+                                    </div>
+                                {:else}
+                                    <div class="agent-panel__user-content">
+                                        {#if msg.image}
+                                            <div class="agent-panel__attached-hint">📎 {msg.image.split(/[\\/]/).pop()}</div>
+                                        {/if}
+                                        <p class="agent-panel__text">{msg.content}</p>
+                                    </div>
                                 {/if}
-                                <p class="agent-panel__text">{msg.content}</p>
                             </div>
-                        {:else if msg.role === "system"}
-                            <div class="agent-panel__system-note">
-                                <span>🔧</span> {msg.content}
-                            </div>
-                        {:else}
-                            <div class="agent-panel__error-note">
-                                <span>❌</span> {msg.content}
-                            </div>
-                        {/if}
-                    </div>
-                </div>
+                        </div>
+                    {/if}
+                {/if}
             {/each}
 
             {#if agentStore.isLoading}
@@ -152,6 +359,15 @@
         </div>
 
         <div class="agent-panel__input-container">
+            {#if showSuggestions && filteredSuggestions.length > 0}
+                <SuggestionsList 
+                    items={filteredSuggestions} 
+                    selectedIndex={suggestionIndex} 
+                    onSelect={handleSelectSuggestion}
+                    type={suggestionType}
+                />
+            {/if}
+
             {#if attachedImage}
                 <div class="agent-panel__preview-bar">
                     <span>📎 {attachedImage.split(/[\\/]/).pop()}</span>
@@ -161,11 +377,13 @@
             <div class="agent-panel__input-row">
                 <button class="agent-panel__icon-btn" onclick={selectImage} title="Adjuntar imagen">📷</button>
                 <input 
+                    bind:this={chatInputRef}
                     class="agent-panel__input"
                     type="text" 
                     placeholder="Escribe un mensaje..." 
                     bind:value={input}
-                    onkeydown={(e) => e.key === "Enter" && handleSend()}
+                    oninput={handleInput}
+                    onkeydown={handleKeyDown}
                 />
                 <button class="agent-panel__send-btn" onclick={handleSend} disabled={agentStore.isLoading}>
                     {#if agentStore.isLoading}
@@ -183,14 +401,6 @@
 {/if}
 
 <style>
-    .agent-panel-overlay {
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,0.4);
-        backdrop-filter: blur(2px);
-        z-index: 1000;
-    }
-
     .agent-panel {
         position: relative;
         width: 100%;
@@ -272,12 +482,35 @@
         padding: 12px 16px;
         border-radius: 12px;
         font-size: 0.9rem;
+        overflow-wrap: break-word;
+        word-break: break-word;
+        word-wrap: break-word;
+        overflow: hidden;
     }
 
     .agent-panel__message--assistant .agent-panel__bubble {
         background: var(--bg-tertiary);
         border: 1px solid var(--border-color);
         border-radius: 4px 12px 12px 12px;
+    }
+
+    .agent-panel__markdown-body :global(table) {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 8px 0;
+        font-size: 0.85rem;
+    }
+    .agent-panel__markdown-body :global(th), .agent-panel__markdown-body :global(td) {
+        border: 1px solid var(--border-color);
+        padding: 6px;
+        text-align: left;
+    }
+    .agent-panel__markdown-body :global(th) {
+        background: rgba(255,255,255,0.05);
+    }
+    .agent-panel__markdown-body :global(ul), .agent-panel__markdown-body :global(ol) {
+        padding-left: 20px;
+        margin: 8px 0;
     }
 
     .agent-panel__message--user .agent-panel__bubble {
@@ -315,6 +548,8 @@
         display: flex;
         flex-direction: column;
         gap: 10px;
+        position: relative; /* Crítico para el SuggestionsList */
+        overflow: visible; /* IMPORTANTE: Para que el menú no se corte */
     }
 
     .agent-panel__preview-bar {

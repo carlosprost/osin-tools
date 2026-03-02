@@ -23,10 +23,16 @@ pub struct OsintConfig {
     pub linkedin_session: String,
     pub instagram_session: String,
     pub twitter_session: String,
-    pub facebook_session: String,
+    pub fb_c_user: String,
+    pub fb_xs: String,
     pub spotify_client_id: String,
     pub spotify_client_secret: String,
     pub wsl_sudo_password: String,
+    pub telegram_token: String,
+    pub telegram_admin_id: String,
+    pub telegram_active: bool,
+    pub ollama_url: String,
+    pub ollama_model: String,
 }
 
 impl Default for OsintConfig {
@@ -44,10 +50,16 @@ impl Default for OsintConfig {
             linkedin_session: String::new(),
             instagram_session: String::new(),
             twitter_session: String::new(),
-            facebook_session: String::new(),
+            fb_c_user: String::new(),
+            fb_xs: String::new(),
             spotify_client_id: String::new(),
             spotify_client_secret: String::new(),
             wsl_sudo_password: String::new(),
+            telegram_token: String::new(),
+            telegram_admin_id: String::new(),
+            telegram_active: false,
+            ollama_url: "http://localhost:11434".to_string(),
+            ollama_model: "llama3.2".to_string(),
         }
     }
 }

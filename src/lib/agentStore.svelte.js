@@ -73,7 +73,15 @@ class AgentStore {
         try {
           const parsedHistory = JSON.parse(history);
           if (parsedHistory.length > 0) {
-            this.messages = parsedHistory;
+            // Filtrar mensajes que son puramente de control técnico [TOOL_CALLS]
+            this.messages = parsedHistory.filter((msg) => {
+              if (
+                msg.role === "assistant" &&
+                msg.content.startsWith("[TOOL_CALLS]")
+              )
+                return false;
+              return true;
+            });
           } else {
             // Si está vacío, mensaje de bienvenida por defecto para el caso
             this.messages = [
@@ -127,9 +135,46 @@ class AgentStore {
         caseName: this.activeCase?.name || null,
       });
 
+      console.log("DEBUG [agentStore]: Resultado de ask_agent:", result);
+
       if (result.success) {
         this.messages.push({ role: "assistant", content: result.data });
         this.saveHistory(); // Guardar tras recibir respuesta
+      } else {
+        this.messages.push({
+          role: "error",
+          content: result.data || "Error desconocido del agente.",
+        });
+      }
+    } catch (e) {
+      this.messages.push({ role: "error", content: `Error del Sistema: ${e}` });
+    } finally {
+      this.isLoading = false;
+      this.statusMessage = "Listo";
+      this.activeTask = null;
+      this.saveHistory();
+    }
+  }
+
+  /**
+   * Procesa una query contra el agente sin agregar un mensaje de usuario a la UI.
+   * Útil para comandos slash que ya fueron agregados manualmente o procesos internos.
+   */
+  async processQuery(query, imagePath = null) {
+    this.isLoading = true;
+    this.statusMessage = "Pensando...";
+    this.activeTask = null;
+
+    try {
+      const result = await invoke("ask_agent", {
+        query: query,
+        imagePath: imagePath,
+        caseName: this.activeCase?.name || null,
+      });
+
+      if (result.success) {
+        this.messages.push({ role: "assistant", content: result.data });
+        this.saveHistory();
       } else {
         this.messages.push({
           role: "error",

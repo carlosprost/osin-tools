@@ -79,6 +79,14 @@
       <span class="icon">🎯</span>
       Objetivos
     </button>
+    <button
+      class="nav-item"
+      class:active={currentView === "manual-tools"}
+      onclick={() => (currentView = "manual-tools")}
+    >
+      <span class="icon">💻</span>
+      Consola Manual
+    </button>
 
     <div class="divider"></div>
 
@@ -125,9 +133,6 @@
     letter-spacing: 1px;
   }
 
-  .text-accent {
-    color: var(--accent-color);
-  }
   .logo-icon {
     margin-right: 8px;
   }

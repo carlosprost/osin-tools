@@ -32,7 +32,7 @@ pub struct Target {
     pub name: String,
     pub target_type: TargetType,
     pub category: String, // Nueva categoría persistente
-    pub data: HashMap<String, String>,
+    pub data: HashMap<String, serde_json::Value>,
     pub linked_targets: Vec<TargetLink>,
     pub created_at: DateTime<Utc>,
 }
@@ -66,6 +66,10 @@ impl CaseManager {
             let _ = fs::create_dir_all(&base_path);
         }
         CaseManager { base_path }
+    }
+
+    pub fn get_case_path(&self, case_name: &str) -> PathBuf {
+        self.base_path.join(case_name)
     }
 
     fn get_db_conn(&self, case_name: &str) -> SqlResult<Connection> {
@@ -343,10 +347,74 @@ impl CaseManager {
                     _ => TargetType::Other,
                 };
 
-                let mut data = HashMap::new();
+                let mut data: HashMap<String, serde_json::Value> = HashMap::new();
                 if let Some(m_str) = metadata_str {
-                    if let Ok(parsed) = serde_json::from_str::<HashMap<String, String>>(&m_str) {
-                        data = parsed;
+                    // Función recursiva para desempaquetar CUALQUIER nivel de serialización JSON en strings
+                    fn deep_rescue(v: serde_json::Value) -> serde_json::Value {
+                        match v {
+                            serde_json::Value::String(s) => {
+                                let trimmed = s.trim();
+                                if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+                                    || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+                                {
+                                    if let Ok(parsed) =
+                                        serde_json::from_str::<serde_json::Value>(trimmed)
+                                    {
+                                        deep_rescue(parsed)
+                                    } else {
+                                        serde_json::Value::String(s)
+                                    }
+                                } else {
+                                    serde_json::Value::String(s)
+                                }
+                            }
+                            serde_json::Value::Object(map) => {
+                                let mut new_map = serde_json::Map::new();
+                                for (k, val) in map {
+                                    new_map.insert(k, deep_rescue(val));
+                                }
+                                serde_json::Value::Object(new_map)
+                            }
+                            serde_json::Value::Array(arr) => {
+                                serde_json::Value::Array(arr.into_iter().map(deep_rescue).collect())
+                            }
+                            _ => v,
+                        }
+                    }
+
+                    if let Ok(mut parsed) =
+                        serde_json::from_str::<HashMap<String, serde_json::Value>>(&m_str)
+                    {
+                        // 1. Limpiar y rescatar todo el mapa
+                        let mut rescued_map = HashMap::new();
+                        for (k, v) in parsed.drain() {
+                            rescued_map.insert(k, deep_rescue(v));
+                        }
+
+                        // 2. Consolidar herramientas técnicas en 'detalles_tecnicos'
+                        let mut tech_map = rescued_map
+                            .remove("detalles_tecnicos")
+                            .and_then(|v| v.as_object().cloned())
+                            .unwrap_or_default();
+
+                        let tools = ["whois", "ping", "dns", "nmap", "traceroute", "curl", "http"];
+                        for tool in tools {
+                            if let Some(val) = rescued_map.remove(tool) {
+                                // Si el dato ya venía estructurado como { detalles_tecnicos: { tool: ... } } por error previo
+                                let inner = val
+                                    .get("detalles_tecnicos")
+                                    .and_then(|dt| dt.get(tool))
+                                    .unwrap_or(&val)
+                                    .clone();
+                                tech_map.insert(tool.to_string(), inner);
+                            }
+                        }
+
+                        rescued_map.insert(
+                            "detalles_tecnicos".to_string(),
+                            serde_json::Value::Object(tech_map),
+                        );
+                        data = rescued_map;
                     }
                 }
 

@@ -130,8 +130,6 @@
         letter-spacing: 1px;
     }
 
-    .welcome__brand-accent { color: var(--accent-color); font-weight: 800; }
-
     .welcome__intro-text {
         color: var(--text-secondary);
         line-height: 1.6;

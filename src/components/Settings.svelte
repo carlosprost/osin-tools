@@ -1,118 +1,50 @@
 <script>
     import { invoke } from "@tauri-apps/api/core";
     import { onMount } from "svelte";
-
-    // Default keys state
-    let apiKeys = $state({
-        hunter_io: "",
-        shodan: "",
-        virustotal: "",
-        ipapi: "",
-        hibp_api_key: "",
-        proxy_url: "",
-        tor_active: false,
-        mac_masking_active: false,
-        original_mac: "",
-        linkedin_session: "",
-        instagram_session: "",
-        twitter_session: "",
-        facebook_session: "",
-        wsl_sudo_password: "",
-    });
+    import { configStore } from "../lib/configStore.svelte.js";
 
     let showSavedMessage = $state(false);
 
     onMount(async () => {
-        // 1. Cargar configuración básica (toggles) desde localStorage
+        // La carga inicial ya la hace el constructor del store, 
+        // pero aseguramos la migración de secretos si es necesario.
         const savedKeys = localStorage.getItem("osint_api_keys");
-        let localData = {};
         if (savedKeys) {
-            localData = JSON.parse(savedKeys);
-            apiKeys = { 
-                ...apiKeys, 
-                ...localData,
-                tor_active: false,
-                mac_masking_active: false,
-                proxy_url: ""
-            };
-        }
+            const localData = JSON.parse(savedKeys);
+            const services = [
+                'hunter_io', 'shodan', 'virustotal', 'ipapi', 'hibp_api_key',
+                'linkedin_session', 'instagram_session', 'twitter_session', 
+                'fb_c_user', 'fb_xs',
+                'wsl_sudo_password', 'telegram_token', 'telegram_admin_id'
+            ];
 
-        // 2. Intentar cargar secretos desde el Keyring (Seguro)
-        const services = [
-            'hunter_io', 'shodan', 'virustotal', 'ipapi', 'hibp_api_key',
-            'linkedin_session', 'instagram_session', 'twitter_session', 'facebook_session',
-            'wsl_sudo_password'
-        ];
-
-        for (const service of services) {
-            try {
-                // Si ya tenemos el valor en localData, es un candidato a migración
-                const localValue = localData[service];
-                
-                const res = await invoke("get_secure_secret", { service });
-                if (res.success && res.data) {
-                    apiKeys[service] = res.data;
+            for (const service of services) {
+                try {
+                    const localValue = localData[service];
+                    const res = await invoke("get_secure_secret", { service });
                     
-                    // Si el proceso llegó acá, y había algo en localStorage, lo borramos (Migración Exitosa)
-                    if (localValue) {
-                        console.log(`Migración: Secreto '${service}' ya estaba en Keyring, limpiando LocalStorage.`);
-                        delete localData[service];
+                    if (!res.success && localValue) {
+                        // MIGRACIÓN: Está en local pero no en Keyring
+                        console.log(`Migración: Moviendo '${service}' al Keyring...`);
+                        const saveRes = await invoke("save_secure_secret", { service, value: localValue });
+                        if (saveRes.success) {
+                            delete localData[service];
+                            configStore.config[service] = localValue;
+                        }
+                    } else if (res.success && res.data) {
+                        configStore.config[service] = res.data;
+                        if (localValue) delete localData[service];
                     }
-                } else if (localValue) {
-                    // MIGRACIÓN ACTIVA: Está en local pero no en Keyring
-                    console.log(`Migración: Moviendo '${service}' al Keyring...`);
-                    const saveRes = await invoke("save_secure_secret", { service, value: localValue });
-                    if (saveRes.success) {
-                        delete localData[service];
-                        apiKeys[service] = localValue;
-                    }
+                } catch (e) {
+                    console.error(`Error procesando secreto para ${service}:`, e);
                 }
-            } catch (e) {
-                console.error(`Error procesando secreto para ${service}:`, e);
             }
+            localStorage.setItem("osint_api_keys", JSON.stringify(localData));
         }
-
-        // 3. Limpiar localStorage de secretos migrados
-        localStorage.setItem("osint_api_keys", JSON.stringify(localData));
-
-        // 4. Sincronizar con el estado global de Rust (OsintConfig)
-        syncWithRust();
     });
 
-    async function syncWithRust() {
-        try {
-            // Enviamos la config a Rust para que las herramientas tengan las keys
-            await invoke("update_osint_config", {
-                config: $state.snapshot(apiKeys)
-            });
-        } catch (e) {
-            console.error("Error sincronizando config con Rust:", e);
-        }
-    }
-
     async function saveKeys() {
-        // Guardar configuración no sensible en localStorage
-        const configToSave = { ...$state.snapshot(apiKeys) };
-        const services = [
-            'hunter_io', 'shodan', 'virustotal', 'ipapi', 'hibp_api_key',
-            'linkedin_session', 'instagram_session', 'twitter_session', 'facebook_session',
-            'wsl_sudo_password'
-        ];
-        
-        // Guardar secretos en Keyring y quitarlos del objeto de localStorage
-        for (const service of services) {
-            const value = configToSave[service];
-            if (value) {
-                await invoke("save_secure_secret", { service, value });
-            } else {
-                await invoke("delete_secure_secret", { service });
-            }
-            delete configToSave[service];
-        }
-
-        localStorage.setItem("osint_api_keys", JSON.stringify(configToSave));
-        await syncWithRust();
-        
+        await configStore.saveConfig();
         showSavedMessage = true;
         setTimeout(() => {
             showSavedMessage = false;
@@ -124,19 +56,14 @@
         try {
             const res = await invoke("set_tor_active", { active });
             if (res.success) {
-                if (active) {
-                    apiKeys.proxy_url = "socks5h://127.0.0.1:9050";
-                } else {
-                    apiKeys.proxy_url = "";
-                }
-                // Guardar config de red (No secreta)
+                configStore.config.proxy_url = active ? "socks5h://127.0.0.1:9050" : "";
                 saveKeys();
             } else {
-                apiKeys.tor_active = !active;
+                configStore.config.tor_active = !active;
             }
         } catch (e) {
             console.error("Error al activar Tor:", e);
-            apiKeys.tor_active = !active;
+            configStore.config.tor_active = !active;
         }
     }
 
@@ -147,39 +74,48 @@
             if (res.success) {
                 saveKeys();
             } else {
-                apiKeys.mac_masking_active = !active;
+                configStore.config.mac_masking_active = !active;
                 alert("Error: " + res.error);
             }
         } catch (e) {
             console.error("Error al alternar MAC:", e);
-            apiKeys.mac_masking_active = !active;
+            configStore.config.mac_masking_active = !active;
             alert("Error: " + e + "\n\n(Asegurate de estar ejecutando la app como administrador)");
         }
     }
 
+    async function handleTelegramChange(event) {
+        const active = event.target.checked;
+        try {
+            await invoke(active ? "start_telegram_cmd" : "stop_telegram_cmd");
+            saveKeys();
+        } catch (e) {
+            console.error("Error al alterar Telegram:", e);
+            configStore.config.telegram_active = !active;
+            alert("Error Telegram: " + e);
+        }
+    }
+
     async function clearKeys() {
-        if (
-            confirm(
-                "¿Estás seguro de que quieres borrar todas las claves y configuraciones? Se eliminarán también del Almacén de Credenciales del Sistema.",
-            )
-        ) {
+        if (confirm("¿Estás seguro de que quieres borrar todas las claves y configuraciones?")) {
             const services = [
                 'hunter_io', 'shodan', 'virustotal', 'ipapi', 'hibp_api_key',
-                'linkedin_session', 'instagram_session', 'twitter_session', 'facebook_session',
-                'wsl_sudo_password'
+                'linkedin_session', 'instagram_session', 'twitter_session', 
+                'fb_c_user', 'fb_xs',
+                'wsl_sudo_password', 'telegram_token', 'telegram_admin_id'
             ];
 
             for (const service of services) {
                 await invoke("delete_secure_secret", { service });
-                apiKeys[service] = "";
+                configStore.config[service] = "";
             }
 
-            apiKeys.tor_active = false;
-            apiKeys.mac_masking_active = false;
-            apiKeys.proxy_url = "";
+            configStore.config.tor_active = false;
+            configStore.config.mac_masking_active = false;
+            configStore.config.proxy_url = "";
             
             localStorage.removeItem("osint_api_keys");
-            syncWithRust();
+            await configStore.syncWithRust();
         }
     }
 </script>
@@ -205,11 +141,11 @@
                     <p class="settings__label-hint text-muted small">Inicia el servicio Tor integrado para acceso anónimo y búsqueda en .onion</p>
                 </div>
                 <label class="settings__switch switch">
-                    <input type="checkbox" bind:checked={apiKeys.tor_active} onchange={handleTorChange}>
+                    <input type="checkbox" bind:checked={configStore.config.tor_active} onchange={handleTorChange}>
                     <span class="slider round"></span>
                 </label>
             </div>
-            {#if apiKeys.tor_active}
+            {#if configStore.config.tor_active}
                 <div class="settings__status-badge settings__status-badge--tor">
                     🌐 Conectado a la Red Tor (Proxy SOCKS5h activo)
                 </div>
@@ -223,19 +159,19 @@
                     <p class="settings__label-hint text-muted small">Cambia la dirección física de tu placa de red activa para mayor anonimato (Requiere Admin)</p>
                 </div>
                 <label class="settings__switch switch">
-                    <input type="checkbox" bind:checked={apiKeys.mac_masking_active} onchange={handleMacChange}>
+                    <input type="checkbox" bind:checked={configStore.config.mac_masking_active} onchange={handleMacChange}>
                     <span class="slider round"></span>
                 </label>
             </div>
-            {#if apiKeys.mac_masking_active}
+            {#if configStore.config.mac_masking_active}
                 <div class="settings__status-badge settings__status-badge--mac">
                     🎭 Identidad Física Protegida (MAC Spoofing Activo)
                 </div>
-                {#if apiKeys.original_mac}
+                {#if configStore.config.original_mac}
                     <div class="settings__mac-info">
                         <div class="settings__mac-item">
                             <span class="settings__mac-label">MAC Física Real:</span>
-                            <span class="settings__mac-value">{apiKeys.original_mac}</span>
+                            <span class="settings__mac-value">{configStore.config.original_mac}</span>
                         </div>
                     </div>
                 {/if}
@@ -243,13 +179,18 @@
         </div>
 
         <div class="settings__form-group">
-            <label class="settings__label" for="hibp">HaveIBeenPwned API (Leaks)</label>
+            <div class="settings__label-row">
+                <label class="settings__label" for="hibp">HaveIBeenPwned API (Leaks)</label>
+                {#if configStore.config.hibp_api_key}
+                    <span class="settings__badge settings__badge--configured">✓ Configurado</span>
+                {/if}
+            </div>
             <input
                 class="settings__input"
                 type="password"
                 id="hibp"
-                bind:value={apiKeys.hibp_api_key}
-                placeholder="Key..."
+                bind:value={configStore.config.hibp_api_key}
+                placeholder={configStore.config.hibp_api_key ? "••••••••••••••••" : "Tu API Key..."}
             />
             <small class="settings__small"
                 ><a class="settings__link" href="https://haveibeenpwned.com/API/Key" target="_blank"
@@ -265,13 +206,18 @@
             Permite al bot ejecutar herramientas nativas con privilegios de superusuario de forma automatizada.
         </p>
         <div class="settings__form-group">
-            <label class="settings__label" for="wsl_sudo">WSL Sudo Password</label>
+            <div class="settings__label-row">
+                <label class="settings__label" for="wsl_sudo">WSL Sudo Password</label>
+                {#if configStore.config.wsl_sudo_password}
+                    <span class="settings__badge settings__badge--configured">✓ Configurado</span>
+                {/if}
+            </div>
             <input
                 id="wsl_sudo"
                 class="settings__input"
                 type="password"
-                placeholder="Contraseña de tu usuario en Kali/WSL"
-                bind:value={apiKeys.wsl_sudo_password}
+                placeholder={configStore.config.wsl_sudo_password ? "••••••••••••••••" : "Contraseña de tu usuario en Kali/WSL"}
+                bind:value={configStore.config.wsl_sudo_password}
             />
             <small class="settings__small text-accent">
                 Se guarda de forma segura en el Almacén de Credenciales de Windows (Keyring).
@@ -286,13 +232,18 @@
         </p>
 
         <div class="settings__form-group">
-            <label class="settings__label" for="hunter_io">Hunter.io (Búsqueda de Email)</label>
+            <div class="settings__label-row">
+                <label class="settings__label" for="hunter_io">Hunter.io (Emails)</label>
+                {#if configStore.config.hunter_io}
+                    <span class="settings__badge settings__badge--configured">✓ Configurado</span>
+                {/if}
+            </div>
             <input
                 class="settings__input"
                 type="password"
                 id="hunter_io"
-                bind:value={apiKeys.hunter_io}
-                placeholder="pk_..."
+                bind:value={configStore.config.hunter_io}
+                placeholder={configStore.config.hunter_io ? "••••••••••••••••" : "pk_..."}
             />
             <small class="settings__small"
                 ><a class="settings__link" href="https://hunter.io/api" target="_blank"
@@ -302,13 +253,18 @@
         </div>
 
         <div class="settings__form-group">
-            <label class="settings__label" for="shodan">Shodan (Búsqueda de Dispositivos)</label>
+            <div class="settings__label-row">
+                <label class="settings__label" for="shodan">Shodan (Infraestructura)</label>
+                {#if configStore.config.shodan}
+                    <span class="settings__badge settings__badge--configured">✓ Configurado</span>
+                {/if}
+            </div>
             <input
                 class="settings__input"
                 type="password"
                 id="shodan"
-                bind:value={apiKeys.shodan}
-                placeholder="Key..."
+                bind:value={configStore.config.shodan}
+                placeholder={configStore.config.shodan ? "••••••••••••••••" : "Key..."}
             />
             <small class="settings__small"
                 ><a class="settings__link" href="https://account.shodan.io/" target="_blank"
@@ -318,13 +274,18 @@
         </div>
 
         <div class="settings__form-group">
-            <label class="settings__label" for="virustotal">VirusTotal (Malware/Dominios)</label>
+            <div class="settings__label-row">
+                <label class="settings__label" for="virustotal">VirusTotal (Malware)</label>
+                {#if configStore.config.virustotal}
+                    <span class="settings__badge settings__badge--configured">✓ Configurado</span>
+                {/if}
+            </div>
             <input
                 class="settings__input"
                 type="password"
                 id="virustotal"
-                bind:value={apiKeys.virustotal}
-                placeholder="Key..."
+                bind:value={configStore.config.virustotal}
+                placeholder={configStore.config.virustotal ? "••••••••••••••••" : "Key..."}
             />
             <small class="settings__small"
                 ><a class="settings__link"
@@ -335,29 +296,22 @@
         </div>
 
         <div class="settings__form-group">
-            <label class="settings__label" for="ipapi">ipapi (Datos IP Avanzados)</label>
+            <div class="settings__label-row">
+                <label class="settings__label" for="ipapi">ipapi (IP Intel)</label>
+                {#if configStore.config.ipapi}
+                    <span class="settings__badge settings__badge--configured">✓ Configurado</span>
+                {/if}
+            </div>
             <input
                 class="settings__input"
                 type="password"
                 id="ipapi"
-                bind:value={apiKeys.ipapi}
-                placeholder="Key..."
+                bind:value={configStore.config.ipapi}
+                placeholder={configStore.config.ipapi ? "••••••••••••••••" : "Key..."}
             />
             <small class="settings__small">(Opcional para datos básicos)</small>
         </div>
 
-        <div class="settings__actions">
-            <button class="settings__btn settings__btn--save" onclick={saveKeys}>
-                💾 Guardar Configuración
-            </button>
-            <button class="settings__btn settings__btn--clear" onclick={clearKeys}>
-                Borrar Claves
-            </button>
-        </div>
-
-        {#if showSavedMessage}
-            <div class="settings__toast">¡Configuración guardada correctamente!</div>
-        {/if}
     </div>
 
     <div class="settings__card">
@@ -367,23 +321,157 @@
         </p>
 
         <div class="settings__form-group">
-            <label class="settings__label" for="li_at">LinkedIn Session (li_at)</label>
-            <input class="settings__input" type="password" id="li_at" bind:value={apiKeys.linkedin_session} placeholder="AQED..." />
+            <div class="settings__label-row">
+                <label class="settings__label" for="li_at">LinkedIn Session (li_at)</label>
+                {#if configStore.config.linkedin_session}
+                    <span class="settings__badge settings__badge--configured">✓ Configurado</span>
+                {/if}
+            </div>
+            <input class="settings__input" type="password" id="li_at" bind:value={configStore.config.linkedin_session} placeholder={configStore.config.linkedin_session ? "••••••••••••••••" : "AQED..."} />
         </div>
 
         <div class="settings__form-group">
-            <label class="settings__label" for="insta_sid">Instagram Session (sessionid)</label>
-            <input class="settings__input" type="password" id="insta_sid" bind:value={apiKeys.instagram_session} placeholder="66..." />
+            <div class="settings__label-row">
+                <label class="settings__label" for="insta_sid">Instagram Session (sessionid)</label>
+                {#if configStore.config.instagram_session}
+                    <span class="settings__badge settings__badge--configured">✓ Configurado</span>
+                {/if}
+            </div>
+            <input class="settings__input" type="password" id="insta_sid" bind:value={configStore.config.instagram_session} placeholder={configStore.config.instagram_session ? "••••••••••••••••" : "66..."} />
         </div>
 
         <div class="settings__form-group">
-            <label class="settings__label" for="x_token">Twitter/X Auth Token (auth_token)</label>
-            <input class="settings__input" type="password" id="x_token" bind:value={apiKeys.twitter_session} placeholder="abc..." />
+            <div class="settings__label-row">
+                <label class="settings__label" for="x_token">Twitter/X Auth Token (auth_token)</label>
+                {#if configStore.config.twitter_session}
+                    <span class="settings__badge settings__badge--configured">✓ Configurado</span>
+                {/if}
+            </div>
+            <input class="settings__input" type="password" id="x_token" bind:value={configStore.config.twitter_session} placeholder={configStore.config.twitter_session ? "••••••••••••••••" : "abc..."} />
         </div>
 
         <div class="settings__form-group">
-            <label class="settings__label" for="fb_session">Facebook Cookie String</label>
-            <input class="settings__input" type="password" id="fb_session" bind:value={apiKeys.facebook_session} placeholder="c_user=...; xs=..." />
+            <strong class="settings__label-strong">Facebook Cookie (Sesión)</strong>
+            <div class="settings__fb-grid">
+                <div class="settings__fb-field">
+                    <div class="settings__label-row">
+                        <label class="settings__fb-label" for="fb_c_user">c_user</label>
+                        {#if configStore.config.fb_c_user}
+                            <span class="settings__badge settings__badge--configured-small">✓</span>
+                        {/if}
+                    </div>
+                    <input id="fb_c_user" class="settings__input settings__input--small" type="password" bind:value={configStore.config.fb_c_user} placeholder={configStore.config.fb_c_user ? "••••" : "ID Usuario"} />
+                </div>
+                <div class="settings__fb-field">
+                    <div class="settings__label-row">
+                        <label class="settings__fb-label" for="fb_xs">xs (session secret)</label>
+                        {#if configStore.config.fb_xs}
+                            <span class="settings__badge settings__badge--configured-small">✓</span>
+                        {/if}
+                    </div>
+                    <input id="fb_xs" class="settings__input settings__input--small" type="password" bind:value={configStore.config.fb_xs} placeholder={configStore.config.fb_xs ? "••••" : "Token secreto"} />
+                </div>
+            </div>
+            <small class="settings__small text-muted">Ingresá los valores individuales de las cookies para saltear el login.</small>
+        </div>
+    </div>
+
+    <div class="settings__card">
+        <h3 class="settings__card-title">Integración con Telegram (Bot)</h3>
+        <p class="settings__card-description text-muted">
+            Inicia un bot en background para comunicarte con el Agente desde el celular.
+        </p>
+
+        <div class="settings__form-group">
+            <div class="settings__label-row">
+                <label class="settings__label" for="tg_token">Protocolo Bot Token</label>
+                {#if configStore.config.telegram_token}
+                    <span class="settings__badge settings__badge--configured">✓ Configurado</span>
+                {/if}
+            </div>
+            <input class="settings__input" type="password" id="tg_token" bind:value={configStore.config.telegram_token} placeholder={configStore.config.telegram_token ? "••••••••••••••••" : "123456789:ABCDefgh..."} />
+        </div>
+
+        <div class="settings__form-group">
+            <div class="settings__label-row">
+                <label class="settings__label" for="tg_admin">ID Administrador (Restricción de Seguridad)</label>
+                {#if configStore.config.telegram_admin_id}
+                    <span class="settings__badge settings__badge--configured">✓ Configurado</span>
+                {/if}
+            </div>
+            <input class="settings__input" type="text" id="tg_admin" bind:value={configStore.config.telegram_admin_id} placeholder="EJ: 987654321" />
+            <small class="settings__small text-accent">Debés interactuar primero con el bot en Telegram para saber tu ID o pedirselo a @userinfobot.</small>
+        </div>
+
+        <div class="settings__form-group settings__form-group--toggle">
+            <div class="settings__flex-between">
+                <div>
+                    <strong class="settings__label-strong">Activar Bot MODO ESPERA</strong>
+                    <p class="settings__label-hint text-muted small">Arranca o detiene el daemon de escucha asíncrono.</p>
+                </div>
+                <label class="settings__switch switch">
+                    <input type="checkbox" bind:checked={configStore.config.telegram_active} onchange={handleTelegramChange}>
+                    <span class="slider round"></span>
+                </label>
+            </div>
+            {#if configStore.config.telegram_active}
+                <div class="settings__status-badge" style="background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3); color: #38bdf8; margin-top: 10px; display: inline-block; padding: 5px 10px; border-radius: 4px; font-size: 0.85em;">
+                    🤖 Escuchando comandos en Background (Polling Activo)
+                </div>
+            {/if}
+        </div>
+    </div>
+
+    <div class="settings__card">
+        <h3 class="settings__card-title">Configuración de Inteligencia Artificial (Ollama)</h3>
+        <p class="settings__card-description text-muted">
+            Configura la conexión al motor de inferencia local.
+        </p>
+
+        <div class="settings__form-group">
+            <label class="settings__label" for="ollama_url">URL de Ollama Base</label>
+            <input 
+                class="settings__input" 
+                type="text" 
+                id="ollama_url" 
+                bind:value={configStore.config.ollama_url} 
+                onblur={() => configStore.refreshModels()}
+                placeholder="http://localhost:11434" 
+            />
+            <small class="settings__small">Ruta donde SODIIC irá a buscar el modelo de texto y los embeddings vectoriales.</small>
+        </div>
+
+        <div class="settings__form-group">
+            <label class="settings__label" for="ollama_model">Modelo Principal de Ollama</label>
+            <div class="settings__flex-row">
+                <select 
+                    class="settings__input" 
+                    id="ollama_model" 
+                    bind:value={configStore.config.ollama_model}
+                    onchange={() => configStore.syncWithRust()}
+                >
+                    {#if configStore.availableModels.length === 0}
+                        <option value={configStore.config.ollama_model}>{configStore.config.ollama_model} (Manual)</option>
+                    {/if}
+                    {#each configStore.availableModels as model}
+                        <option value={model}>{model}</option>
+                    {/each}
+                </select>
+                <button 
+                    class="settings__btn-icon" 
+                    onclick={() => configStore.refreshModels()} 
+                    title="Refrescar modelos"
+                    disabled={configStore.isLoadingModels}
+                >
+                    {configStore.isLoadingModels ? '⌛' : '🔄'}
+                </button>
+            </div>
+            <small class="settings__small">
+                Seleccioná el modelo local instalado. 
+                {#if configStore.isLoadingModels}
+                    <span class="text-accent">Buscando modelos...</span>
+                {/if}
+            </small>
         </div>
     </div>
 
@@ -398,6 +486,19 @@
             <span class="settings__mono">LocalOnly</span>
         </div>
     </div>
+
+    <div class="settings__footer-actions">
+        <button class="settings__btn settings__btn--save settings__btn--large" onclick={saveKeys}>
+            💾 Guardar Toda la Configuración
+        </button>
+        <button class="settings__btn settings__btn--clear" onclick={clearKeys}>
+            Restablecer App
+        </button>
+    </div>
+
+    {#if showSavedMessage}
+        <div class="settings__toast">✅ Todo guardado exitosamente en el sistema.</div>
+    {/if}
 </div>
 
 <style>
@@ -441,6 +542,61 @@
         font-weight: 500;
     }
 
+    .settings__label-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+    }
+
+    .settings__label-row .settings__label {
+        margin-bottom: 0;
+    }
+
+    .settings__badge {
+        font-size: 0.75rem;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: 600;
+    }
+
+    .settings__badge--configured {
+        background: rgba(16, 185, 129, 0.1);
+        color: #10b981;
+        border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    
+    .settings__badge--configured-small {
+        background: #10b981;
+        color: white;
+        width: 16px;
+        height: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        padding: 0;
+        font-size: 10px;
+    }
+
+    .settings__fb-grid {
+        display: grid;
+        grid-template-columns: 1fr 2fr;
+        gap: 15px;
+        margin-bottom: 10px;
+        background: rgba(0, 0, 0, 0.2);
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+    }
+
+    .settings__fb-label {
+        color: var(--text-muted);
+        font-family: var(--font-mono);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
     .settings__input {
         width: 100%;
         padding: 10px;
@@ -468,10 +624,26 @@
         text-decoration: underline;
     }
 
-    .settings__actions {
+    .settings__footer-actions {
         display: flex;
-        gap: 10px;
-        margin-top: 2rem;
+        justify-content: center;
+        gap: 15px;
+        margin-top: 3rem;
+        padding: 2rem;
+        background: var(--bg-secondary);
+        border-top: 1px solid var(--border-color);
+        border-radius: 8px;
+        position: sticky;
+        bottom: 10px;
+        z-index: 100;
+        box-shadow: 0 -10px 20px rgba(0, 0, 0, 0.2);
+    }
+
+    .settings__btn--large {
+        padding: 15px 30px;
+        font-size: 1.1rem;
+        flex: 1;
+        max-width: 400px;
     }
 
     .settings__switch {
@@ -627,11 +799,6 @@
         color: white;
     }
 
-    .settings__mac-value--masked {
-        color: #10b981;
-        font-weight: bold;
-    }
-
     .settings__status-badge {
         padding: 5px 10px;
         border-radius: 4px;
@@ -661,5 +828,34 @@
     .settings__label-strong {
         display: block;
         margin-bottom: 2px;
+    }
+
+    .settings__flex-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+
+    .settings__btn-icon {
+        background: var(--bg-primary);
+        border: 1px solid var(--border-color);
+        color: var(--text-primary);
+        padding: 8px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .settings__btn-icon:hover:not(:disabled) {
+        border-color: var(--accent-color);
+        background: rgba(var(--accent-rgb), 0.1);
+    }
+
+    .settings__btn-icon:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
     }
 </style>

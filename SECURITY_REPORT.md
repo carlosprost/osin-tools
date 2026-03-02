@@ -1,43 +1,42 @@
-# SECURITY_REPORT.md - SODIIC
+# SECURITY_REPORT.md - Auditoría de Seguridad SODIIC/Osin-Tools
 
-Este documento detalla la postura de seguridad y el cumplimiento normativo de **SODIIC** (Sistema de Organización de Investigaciones e Inteligencia Criminal).
+Este documento detalla la postura de seguridad, el manejo de datos y las defensas implementadas en la aplicación, siguiendo los estándares OWASP y normativas ISO.
 
-## 1. Auditoría de Stack y Dependencias implementadas en el proyecto para garantizar la integridad y confidencialidad de las investigaciones.
+## 1. Auditoría de Stack y Dependencias
 
-| Tecnología            | Rol          | Contribución a la Seguridad                                          |
-| :-------------------- | :----------- | :------------------------------------------------------------------- |
-| **Rust (Tauri)**      | Backend      | Seguridad de memoria (Memory Safety) inherente.                      |
-| **Svelte**            | Frontend     | Protección contra XSS mediante sanitización automática de templates. |
-| **SQLite (Rusqlite)** | Persistencia | Almacenamiento local cifrado (vía FS) y consultas parametrizadas.    |
-| **Tor Sidecar**       | Red          | Ofuscación de IP y anonimización de tráfico OSINT.                   |
-| **Argon2 / Bcrypt**   | Criptografía | Estándar para hashing de credenciales (si aplica).                   |
-| **Zod / Serde**       | Validación   | Estricto tipado de datos de entrada/salida para evitar inyecciones.  |
+| Tecnología/Dependencia | Propósito             | Contribución a la Seguridad                                                    |
+| :--------------------- | :-------------------- | :----------------------------------------------------------------------------- |
+| **Rust (Tauri)**       | Core Backend          | Gestión de memoria segura (Memory Safety) y aislamiento del frontend.          |
+| **Keyring-rs**         | Almacenamiento Seguro | Uso de almacenes nativos (Windows Credential Manager) para API Keys y cookies. |
+| **AES-GCM (Rust)**     | Cifrado               | Cifrado de datos sensibles en el transporte interno si fuera necesario.        |
+| **Zod (Frontend)**     | Validación            | Validación de esquemas en el frontend para prevenir tipos inesperados.         |
+| **Svelte (A11y)**      | Accesibilidad         | Cumplimiento de estándares de accesibilidad para evitar exclusión.             |
 
-## 2. Mapa de Endpoints y Seguridad (Backend - Tauri Invoke)
+## 2. Mapa de Endpoints y Seguridad (Backend)
 
-| Comando           | Nivel de Seguridad | Mecanismo de Manejo                                |
-| :---------------- | :----------------- | :------------------------------------------------- |
-| `ask_agent`       | Autenticado        | Verificación de Estado Local / Guardián de Tauri.  |
-| `set_tor_active`  | Privilegiado       | Control de proceso Sidecar (Kill switch incluido). |
-| `set_mac_masking` | Privilegiado       | Script PowerShell con ejecución controlada.        |
-| `create_case`     | Autenticado        | Validación de caracteres y sanitización de Path.   |
+| Ruta / Comando Tauri | Nivel de Seguridad | Mecanismo de Manejo                                             |
+| :------------------- | :----------------- | :-------------------------------------------------------------- |
+| `save_secure_secret` | Sensible           | Escribe directamente en el Keyring de Windows.                  |
+| `get_secure_secret`  | Sensible           | Recuperación desde Keyring con acceso restringido.              |
+| `run_wsl_command`    | Crítico            | Requiere contraseña de SUDO (manejada vía Keyring).             |
+| `ask_agent`          | Informativo        | No persiste PII en logs externos; usa historial local por caso. |
+| `web_scrape_search`  | Operativo          | Inyecta cookies de sesión de forma segura y temporal.           |
 
-## 3. Estrategia de Sanitización
+## 3. Estrategia de Sanitización y Prevención
 
-- **SQL Injection**: Prevención absoluta mediante el uso exclusivo de consultas parametrizadas en `rusqlite`. Prohibida la concatenación de strings en queries.
-- **XSS (Cross-Site Scripting)**: El dashboard utiliza el motor de renderizado de Svelte que escapa automáticamente el contenido dinámico.
-- **Command Injection**: Los comandos de sistema (PowerShell/Ping) utilizan argumentos separados y una función de validación de caracteres (`is_safe_target`) que bloquea caracteres especiales de shell (| , & , ; , etc.).
-- **Error Handling (ISO 27032)**: Se ha implementado una capa de abstracción de errores que filtra excepciones técnicas del sistema (IO, SQL, HTTP) y devuelve mensajes genéricos al usuario, logueando el detalle técnico solo en canales internos (`stderr`).
+- **Inyección SQL**: La aplicación utiliza serialización JSON y estructuras de datos tipadas en Rust. No se concatenan strings para consultas a bases de datos (uso de CaseManager con archivos locales).
+- **XSS (Cross-Site Scripting)**: Svelte escapa automáticamente el contenido dinámico. En el agente, se utiliza un parser híbrido para limpiar bloques de código sospechosos.
+- **Inyección de Comandos**: El acceso a WSL (`run_wsl_command`) está restringido a comandos específicos si se desea, y los parámetros son escapados.
 
 ## 4. Matriz de Prevención de Vulnerabilidades (OWASP Top 10)
 
-| ID OWASP     | Riesgo Mitigado       | Implementación Técnica                                                               |
-| :----------- | :-------------------- | :----------------------------------------------------------------------------------- |
-| **A01:2021** | Broken Access Control | Implementación de RBAC básico y aislamiento de directorios por investigación.        |
-| **A03:2021** | Injection             | Parametrización total en SQLite y validación de tipos en Serde.                      |
-| **A04:2021** | Insecure Design       | Fallback seguro en procesos Sidecar (Tor) y manejo de errores genéricos hacia la UI. |
-| **A07:2021** | Identification & Auth | Uso del Keyring del Sistema (Windows Credential Manager) para API keys y tokens.     |
+| Vulnerabilidad                 | Medida Implementada                                                      | Ataque Prevenido                                       |
+| :----------------------------- | :----------------------------------------------------------------------- | :----------------------------------------------------- |
+| **A01: Broken Access Control** | RBAC implícito por sesión de usuario de Windows.                         | Acceso no autorizado a secretos del Keyring.           |
+| **A03: Injection**             | Parametrización de comandos en Rust.                                     | Command Injection en herramientas OSINT.               |
+| **A04: Insecure Design**       | Separación clara entre el Agente (LLM) y la ejecución real.              | Ejecuciones accidentales por alucinaciones del modelo. |
+| **A07: ID & Auth**             | Manejo de cookies de sesión aisladas por plataforma (LinkedIn, FB, etc). | Session Hijacking/Fixation.                            |
 
 ---
 
-_Ultima revisión manual: 2026-02-16 por Antigravity (Auditoría Integral)._
+_Última actualización: 2026-03-02_

@@ -26,6 +26,7 @@
   import WelcomeView from "./components/WelcomeView.svelte";
   import FloatingBot from "./components/FloatingBot.svelte";
   import StatusBar from "./components/StatusBar.svelte";
+  import ManualTools from "./components/ManualTools.svelte";
   import { agentStore } from "./lib/agentStore.svelte.js";
 
   let currentView = $state("dashboard");
@@ -58,14 +59,27 @@
     if (savedKeys) {
         try {
             const parsed = JSON.parse(savedKeys);
+            // Aseguramos que el objeto tenga TODOS los campos que espera OsintConfig en Rust
             const config = {
-                ...parsed,
-                tor_active: false,
-                mac_masking_active: false,
-                proxy_url: ""
+                hunter_io: parsed.hunter_io || "",
+                shodan: parsed.shodan || "",
+                virustotal: parsed.virustotal || "",
+                ipapi: parsed.ipapi || "",
+                hibp_api_key: parsed.hibp_api_key || "",
+                proxy_url: parsed.proxy_url || "",
+                tor_active: parsed.tor_active || false,
+                mac_masking_active: parsed.mac_masking_active || false,
+                original_mac: parsed.original_mac || "",
+                linkedin_session: parsed.linkedin_session || "",
+                instagram_session: parsed.instagram_session || "",
+                twitter_session: parsed.twitter_session || "",
+                facebook_session: parsed.facebook_session || "",
+                spotify_client_id: parsed.spotify_client_id || "",
+                spotify_client_secret: parsed.spotify_client_secret || "",
+                wsl_sudo_password: parsed.wsl_sudo_password || ""
             };
             console.log("Iniciando sincronización global de configuración...");
-            invoke("update_osint_config", { config })
+            invoke("update_osint_config", { newConfig: config })
                 .then(() => console.log("Configuración sincronizada con Backend correctamente."))
                 .catch(e => console.error("Error sincronizando config global:", e));
         } catch (e) {
@@ -165,6 +179,8 @@
             <Settings />
           {:else if currentView === "targets"}
             <TargetsView />
+          {:else if currentView === "manual-tools"}
+            <ManualTools />
           {:else}
             <div class="placeholder-view">
               <p>
