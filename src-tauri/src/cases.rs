@@ -21,6 +21,24 @@ pub enum TargetType {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum ObjectiveStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Objective {
+    pub id: String,
+    pub description: String,
+    pub status: ObjectiveStatus,
+    pub priority: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TargetLink {
     pub target_id: String,
     pub relation: String,
@@ -122,6 +140,18 @@ impl CaseManager {
                 level TEXT NOT NULL, -- 'INFO', 'WARN', 'SUCCESS'
                 message TEXT NOT NULL,
                 tool_name TEXT
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS objectives (
+                id TEXT PRIMARY KEY,
+                description TEXT NOT NULL,
+                status TEXT NOT NULL, -- 'Pending', 'Running', 'Completed', 'Failed'
+                priority INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )",
             [],
         )?;
@@ -929,5 +959,104 @@ impl CaseManager {
             }
         }
         Ok(logs)
+    }
+
+    // --- OBJECTIVES CRUD ---
+
+    pub fn create_objective(
+        &self,
+        case_name: &str,
+        description: &str,
+        priority: i32,
+    ) -> Result<Objective, String> {
+        let conn = self.get_db_conn(case_name).map_err(|e| e.to_string())?;
+        let now = Utc::now();
+        let objective = Objective {
+            id: uuid::Uuid::new_v4().to_string(),
+            description: description.to_string(),
+            status: ObjectiveStatus::Pending,
+            priority,
+            created_at: now,
+            updated_at: now,
+        };
+
+        conn.execute(
+            "INSERT INTO objectives (id, description, status, priority, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                objective.id,
+                objective.description,
+                format!("{:?}", objective.status),
+                objective.priority,
+                objective.created_at.to_rfc3339(),
+                objective.updated_at.to_rfc3339()
+            ],
+        )
+        .map_err(|e| format!("Error creando objetivo: {}", e))?;
+
+        Ok(objective)
+    }
+
+    pub fn get_objectives(&self, case_name: &str) -> Result<Vec<Objective>, String> {
+        let conn = self.get_db_conn(case_name).map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT id, description, status, priority, created_at, updated_at FROM objectives ORDER BY priority DESC, created_at ASC")
+            .map_err(|e| e.to_string())?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let status_str: String = row.get(2)?;
+                let status = match status_str.as_str() {
+                    "Running" => ObjectiveStatus::Running,
+                    "Completed" => ObjectiveStatus::Completed,
+                    "Failed" => ObjectiveStatus::Failed,
+                    _ => ObjectiveStatus::Pending,
+                };
+
+                Ok(Objective {
+                    id: row.get(0)?,
+                    description: row.get(1)?,
+                    status,
+                    priority: row.get(3)?,
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                        .unwrap_or_else(|_| Utc::now().into())
+                        .with_timezone(&Utc),
+                    updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                        .unwrap_or_else(|_| Utc::now().into())
+                        .with_timezone(&Utc),
+                })
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut objectives = Vec::new();
+        for r in rows {
+            if let Ok(o) = r {
+                objectives.push(o);
+            }
+        }
+        Ok(objectives)
+    }
+
+    pub fn update_objective_status(
+        &self,
+        case_name: &str,
+        id: &str,
+        status: ObjectiveStatus,
+    ) -> Result<(), String> {
+        let conn = self.get_db_conn(case_name).map_err(|e| e.to_string())?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE objectives SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            params![format!("{:?}", status), now, id],
+        )
+        .map_err(|e| format!("Error actualizando estado del objetivo: {}", e))?;
+        Ok(())
+    }
+
+    pub fn delete_objective(&self, case_name: &str, id: &str) -> Result<(), String> {
+        let conn = self.get_db_conn(case_name).map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM objectives WHERE id = ?1", params![id])
+            .map_err(|e| format!("Error eliminando objetivo: {}", e))?;
+        Ok(())
     }
 }

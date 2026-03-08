@@ -6,41 +6,9 @@
     let showSavedMessage = $state(false);
 
     onMount(async () => {
-        // La carga inicial ya la hace el constructor del store, 
-        // pero aseguramos la migración de secretos si es necesario.
-        const savedKeys = localStorage.getItem("osint_api_keys");
-        if (savedKeys) {
-            const localData = JSON.parse(savedKeys);
-            const services = [
-                'hunter_io', 'shodan', 'virustotal', 'ipapi', 'hibp_api_key',
-                'linkedin_session', 'instagram_session', 'twitter_session', 
-                'fb_c_user', 'fb_xs',
-                'wsl_sudo_password', 'telegram_token', 'telegram_admin_id'
-            ];
-
-            for (const service of services) {
-                try {
-                    const localValue = localData[service];
-                    const res = await invoke("get_secure_secret", { service });
-                    
-                    if (!res.success && localValue) {
-                        // MIGRACIÓN: Está en local pero no en Keyring
-                        console.log(`Migración: Moviendo '${service}' al Keyring...`);
-                        const saveRes = await invoke("save_secure_secret", { service, value: localValue });
-                        if (saveRes.success) {
-                            delete localData[service];
-                            configStore.config[service] = localValue;
-                        }
-                    } else if (res.success && res.data) {
-                        configStore.config[service] = res.data;
-                        if (localValue) delete localData[service];
-                    }
-                } catch (e) {
-                    console.error(`Error procesando secreto para ${service}:`, e);
-                }
-            }
-            localStorage.setItem("osint_api_keys", JSON.stringify(localData));
-        }
+        // La carga inicial y persistencia la gestiona el configStore.
+        // Solo refrescamos modelos por si acaso al montar la vista de ajustes.
+        await configStore.refreshModels();
     });
 
     async function saveKeys() {

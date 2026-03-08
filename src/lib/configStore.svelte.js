@@ -1,5 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 
+const SECURE_SERVICES = [
+  "hunter_io",
+  "shodan",
+  "virustotal",
+  "ipapi",
+  "hibp_api_key",
+  "linkedin_session",
+  "instagram_session",
+  "twitter_session",
+  "fb_c_user",
+  "fb_xs",
+  "wsl_sudo_password",
+  "telegram_token",
+  "telegram_admin_id",
+];
+
 class ConfigStore {
   config = $state({
     hunter_io: "",
@@ -16,8 +32,6 @@ class ConfigStore {
     twitter_session: "",
     fb_c_user: "",
     fb_xs: "",
-    spotify_client_id: "",
-    spotify_client_secret: "",
     wsl_sudo_password: "",
     telegram_token: "",
     telegram_admin_id: "",
@@ -34,6 +48,7 @@ class ConfigStore {
   }
 
   async loadFromStorage() {
+    // 1. Cargar datos generales de LocalStorage
     const saved = localStorage.getItem("osint_api_keys");
     if (saved) {
       try {
@@ -43,6 +58,19 @@ class ConfigStore {
         console.error("Error cargando config desde localStorage:", e);
       }
     }
+
+    // 2. Cargar SECRETOS desde Keyring (Nativo)
+    for (const service of SECURE_SERVICES) {
+      try {
+        const res = await invoke("get_secure_secret", { service });
+        if (res.success && res.data) {
+          this.config[service] = res.data;
+        }
+      } catch (e) {
+        console.warn(`No se pudo recuperar el secreto para ${service}:`, e);
+      }
+    }
+
     await this.refreshModels();
     await this.syncWithRust();
   }
@@ -59,10 +87,6 @@ class ConfigStore {
         const data = JSON.parse(res.data);
         if (data.models) {
           this.availableModels = data.models.map((m) => m.name);
-
-          // Si el modelo actual no está en la lista y hay modelos,
-          // pero no queremos sobreescribir si el usuario escribió uno a mano
-          // que quizas aun no se cargo. Solo validamos si la lista tiene algo.
           if (
             this.availableModels.length > 0 &&
             !this.availableModels.includes(this.config.ollama_model)
@@ -95,25 +119,10 @@ class ConfigStore {
   }
 
   async saveConfig() {
-    // Separamos secretos para el Keyring (siguiendo la lógica de Settings.svelte)
     const configToSave = { ...$state.snapshot(this.config) };
-    const secureServices = [
-      "hunter_io",
-      "shodan",
-      "virustotal",
-      "ipapi",
-      "hibp_api_key",
-      "linkedin_session",
-      "instagram_session",
-      "twitter_session",
-      "fb_c_user",
-      "fb_xs",
-      "wsl_sudo_password",
-      "telegram_token",
-      "telegram_admin_id",
-    ];
 
-    for (const service of secureServices) {
+    // Guardar secretos en Keyring y removerlos de localStorage
+    for (const service of SECURE_SERVICES) {
       const value = configToSave[service];
       if (value) {
         await invoke("save_secure_secret", { service, value });
@@ -132,8 +141,6 @@ class ConfigStore {
     if (field === "ollama_url") {
       await this.refreshModels();
     }
-    // No guardamos automáticamente en cada tecla, dejamos que el usuario pulse Guardar
-    // Pero sincronizamos con Rust para que el agente tenga lo último si se usa el chat
     await this.syncWithRust();
   }
 }

@@ -10,18 +10,20 @@ mod loop_detector;
 mod mac_spoof;
 mod memory;
 mod models;
+mod orchestrator;
 mod scraper;
 mod secrets;
 mod skills;
 mod telegram;
 mod tools;
 mod tor_manager;
+mod worker;
 
 pub struct AgentAbort(pub Arc<std::sync::atomic::AtomicBool>);
 
 fn main() {
-    dotenv::dotenv().ok();
     let agent = Agent::new();
+    let config = Arc::new(Mutex::new(models::OsintConfig::default()));
     let abort_flag = agent.abort_flag.clone();
     let tor_state = tor_manager::TorState {
         child: Arc::new(Mutex::new(None)),
@@ -32,14 +34,23 @@ fn main() {
         .manage(AgentAbort(abort_flag))
         .manage(telegram::TelegramState::default())
         .manage(memory::SemanticMemoryManager::new())
-        .manage(Mutex::new(models::OsintConfig::default()))
+        .manage(config.clone())
         .manage(tor_state)
         .setup(|app| {
             let app_data_dir = app
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
-            app.manage(cases::CaseManager::new(app_data_dir));
+            let case_manager = Arc::new(cases::CaseManager::new(app_data_dir));
+            app.manage(case_manager.clone());
+
+            // Iniciar Background Worker
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let worker = worker::BackgroundWorker::new(app_handle);
+                worker.start_processing().await;
+            });
+
             Ok(())
         })
         .plugin(tauri_plugin_shell::init())
@@ -92,7 +103,12 @@ fn main() {
             // Semantic Memory
             commands::add_memory_cmd,
             commands::search_memory_cmd,
-            commands::get_ollama_models
+            commands::get_ollama_models,
+            // Objetivos
+            commands::get_objectives_cmd,
+            commands::create_objective_cmd,
+            commands::update_objective_status_cmd,
+            commands::delete_objective_cmd
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::Destroyed = event {

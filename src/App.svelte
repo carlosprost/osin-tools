@@ -54,39 +54,9 @@
   }
 
   onMount(() => {
-    // --- GLOBAL CONFIG SYNC ---
-    const savedKeys = localStorage.getItem("osint_api_keys");
-    if (savedKeys) {
-        try {
-            const parsed = JSON.parse(savedKeys);
-            // Aseguramos que el objeto tenga TODOS los campos que espera OsintConfig en Rust
-            const config = {
-                hunter_io: parsed.hunter_io || "",
-                shodan: parsed.shodan || "",
-                virustotal: parsed.virustotal || "",
-                ipapi: parsed.ipapi || "",
-                hibp_api_key: parsed.hibp_api_key || "",
-                proxy_url: parsed.proxy_url || "",
-                tor_active: parsed.tor_active || false,
-                mac_masking_active: parsed.mac_masking_active || false,
-                original_mac: parsed.original_mac || "",
-                linkedin_session: parsed.linkedin_session || "",
-                instagram_session: parsed.instagram_session || "",
-                twitter_session: parsed.twitter_session || "",
-                facebook_session: parsed.facebook_session || "",
-                spotify_client_id: parsed.spotify_client_id || "",
-                spotify_client_secret: parsed.spotify_client_secret || "",
-                wsl_sudo_password: parsed.wsl_sudo_password || ""
-            };
-            console.log("Iniciando sincronización global de configuración...");
-            invoke("update_osint_config", { newConfig: config })
-                .then(() => console.log("Configuración sincronizada con Backend correctamente."))
-                .catch(e => console.error("Error sincronizando config global:", e));
-        } catch (e) {
-            console.error("Error leyendo configuración guardada:", e);
-        }
-    }
-
+    // La sincronización de configuración ahora se maneja centralizadamente 
+    // en configStore.svelte.js para evitar inconsistencias con el backend.
+    
     let unlistenFn;
     const setupListener = async () => {
       unlistenFn = await listen("open-tool", (event) => {

@@ -98,6 +98,7 @@ impl LoopDetector {
     }
 
     /// Genera el hash de un resultado
+    #[allow(dead_code)]
     pub fn hash_result(result: &str) -> String {
         Self::sha256_hex(result)
     }
@@ -126,6 +127,7 @@ impl LoopDetector {
     }
 
     /// Registra el resultado de la última llamada (para detectar no-progreso)
+    #[allow(dead_code)]
     pub fn record_result(&mut self, tool_name: &str, args: &str, result_data: &str) {
         let args_hash = Self::hash_call(tool_name, args);
         let result_hash = Self::hash_result(result_data);
